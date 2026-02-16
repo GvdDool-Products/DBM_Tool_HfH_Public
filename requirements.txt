@@ -1,5 +1,5 @@
-streamlit==1.54.0
-streamlit-authenticator==0.5.0
+streamlit
+streamlit-authenticator
 bcrypt
 pandas
 pygithub
