@@ -3,27 +3,53 @@ import streamlit as st
 from github import Github
 import base64
 
-# Configuration from Streamlit Secrets
+# === Detect runtime ===
+# Set this manually for local testing, or detect automatically
+try:
+    RUN_TIME = st.secrets.get("RUN_TIME", "cloud")  # default to cloud if not set
+except Exception:
+    RUN_TIME = "local"  # running locally without Streamlit secrets
+
+st.write(f"Running in: {RUN_TIME}")
+
 def get_config():
-    try:
-        config = {
-            "token": st.secrets["GITHUB_TOKEN"],
-            "repo_name": st.secrets["REPO_NAME"],
-            "db_path": st.secrets.get("DB_FILE_PATH", "data/database.sqlite"),
-            "branch": st.secrets.get("REPO_BRANCH", "main")
+    """Return configuration depending on runtime"""
+    if RUN_TIME == "local":
+        # Local development config
+        return {
+            "db_path": "data/database_dev.sqlite",
+            "token": None,
+            "repo_name": None,
+            "branch": "main"
         }
-        # Check for placeholders
-        if "your_personal_access_token" in config["token"] or "your_username" in config["repo_name"]:
+    else:
+        # Cloud config using secrets
+        try:
+            config = {
+                "token": st.secrets["GITHUB_TOKEN"],
+                "repo_name": st.secrets["REPO_NAME"],
+                "db_path": st.secrets.get("DB_FILE_PATH", "data/database.sqlite"),
+                "branch": st.secrets.get("REPO_BRANCH", "main")
+            }
+            # Check for placeholders
+            if "your_personal_access_token" in config["token"] or "your_username" in config["repo_name"]:
+                return None
+            return config
+        except Exception:
             return None
-            
-        return config
-    except Exception:
-        return None
 
 def pull_database():
-    """
-    Downloads database.sqlite and stores the commit SHA to prevent overwrite conflicts.
-    """
+    """Pull the database from GitHub if running in Cloud"""
+    if RUN_TIME == "local":
+        # Skip GitHub pull for local
+        if os.path.exists("data/database_dev.sqlite"):
+            st.write("✅ Using local development database")
+            return True
+        else:
+            st.error("❌ Local development database not found!")
+            return False
+
+    # Cloud logic
     config = get_config()
     if not config:
         st.warning("GitHub Secrets not configured. Persistence disabled.")
