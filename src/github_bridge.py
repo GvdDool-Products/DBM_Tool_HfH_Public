@@ -32,12 +32,25 @@ def pull_database():
     try:
         g = Github(config["token"])
         repo = g.get_repo(config["repo_name"])
+                
+        # Check if the database file exists in the repo
         contents = repo.get_contents(config["db_path"], ref=config["branch"])
-        
-        # Save the file
+        if contents:
+            st.write("✅ DATABASE FOUND in GitHub repo")
+        else:
+            st.write("❌ DATABASE NOT FOUND in GitHub repo")
+            return False
+
+        # Ensure local folder exists
+        local_folder = os.path.dirname(config["db_path"])
+        os.makedirs(local_folder, exist_ok=True)
+
+        # Write file locally
         with open(config["db_path"], "wb") as f:
             f.write(contents.decoded_content)
-        
+        st.write(f"✅ DATABASE COPIED LOCALLY to {config['db_path']}")
+
+        # Store SHA to prevent overwrite conflicts
         # KEY: Store the SHA of the file we just pulled
         st.session_state['db_sha'] = contents.sha
         
