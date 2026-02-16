@@ -1,0 +1,13 @@
+__pycache__/
+.streamlit/secrets.toml
+*.pyc
+.env
+outputs/
+data/
+notebooks/
+configs/
+
+# databases (never commit)
+*.sqlite
+*.sqlite3
+*.db
