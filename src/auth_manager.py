@@ -1,44 +1,49 @@
 import streamlit as st
 import streamlit_authenticator as stauth
-import bcrypt
-from db_core import get_users, add_user, init_db
+from db_core import get_users, add_user, init_db, clear_first_login_flag
+from github_bridge import push_database
 
 def hash_password(password):
     return stauth.Hasher.hash(password)
 
 def init_auth():
-    # Fetch users from the DB
+    """Fetch users from the DB and prepare the authenticator object"""
     db_users = get_users()
     
-    # If no users exist, seed the initial testingLocal user
+    # If no users exist (new DB), seed the initial testingLocal user
     if not db_users:
-        # We use the new Hasher.hash method for the seed
         admin_pw_hash = stauth.Hasher.hash('Local123')
-        add_user('testingLocal', admin_pw_hash, 'admin')
+        add_user('testingLocal', admin_pw_hash, 'ADMIN')
         db_users = get_users()
 
-    # Format for streamlit-authenticator
+    # Format for streamlit-authenticator (0.4.x)
     credentials = {'usernames': {}}
     for email, pw_hash, role, first_login in db_users:
         credentials['usernames'][email] = {
             'email': email,
             'name': email,
             'password': pw_hash,
-            'roles': [role] # Updated for 0.4.2 plural roles
+            'roles': [role.upper()] # Ensure uppercase for compatibility
         }
 
+    # BUMP COOKIE VERSION TO _v5 and set expiry to 0
+    # This ensures sessions do NOT persist after the browser/program is closed.
     authenticator = stauth.Authenticate(
         credentials,
-        'housing_suitability_db_v3', # New cookie name to clear old sessions
+        'housing_suitability_db_v5', # New version
         'abcdefghijklmnopqrstuvwxyz1234567890_SECURE_KEY', 
-        cookie_expiry_days=0.1 # Short expiry for testing
+        cookie_expiry_days=0  # 0 means the cookie expires when the browser closes
     )
     
     return authenticator
 
 def login_ui():
-    # 1. SIMPLE AUTH BYPASS (User requested for local/cloud testing)
-    # This allows a quick entry without the complex library if needed
+    """Primary Login Logic"""
+    # 0. Check if already authenticated (either via Dev Mode or DB)
+    if st.session_state.get('authentication_status'):
+        return True
+
+    # 1. SIMPLE AUTH BYPASS (Sidebar Dev Mode)
     st.sidebar.title("Simple Auth (Dev Mode)")
     simple_user = st.sidebar.text_input("User", key="simple_u")
     simple_pass = st.sidebar.text_input("Pass", type="password", key="simple_p")
@@ -46,59 +51,64 @@ def login_ui():
     if (simple_user == "testingLocal" and simple_pass == "Local123") or \
        (simple_user == "testingCloud" and simple_pass == "Cloud987"):
         st.session_state['username'] = simple_user
-        st.session_state['user_role'] = 'admin'
+        st.session_state['user_role'] = 'ADMIN'
         st.session_state['authentication_status'] = True
-        return True
+        st.rerun() # Rerun to bypass stauth call below
 
     # 2. STANDARD AUTHENTICATOR
-    authenticator = init_auth()
-    
-    # Determine the form name based on failure status for dynamic feedback
-    form_name = "Login"
-    if st.session_state.get('authentication_status') is False:
-        form_name = "Login - user name or password incorrect, please try again!"
-    
-    # Render the login widget with custom fields
-    authentication_status = authenticator.login(
-        location='main', 
-        fields={'Form name': form_name}
-    )
-    
-    if st.session_state.get('authentication_status'):
-        # Library stores the status and username in session state
-        st.session_state['authenticator'] = authenticator
-        username = st.session_state['username']
+    try:
+        authenticator = init_auth()
         
-        # Clear the "First Login Pending" status in the DB
-        from db_core import clear_first_login_flag
-        if clear_first_login_flag(username):
-            from github_bridge import push_database
-            push_database(f"User {username} activated (first login)")
+        # Determine the form name based on failure status
+        form_name = "Login"
+        if st.session_state.get('authentication_status') is False:
+            form_name = "Login - username or password incorrect!"
         
-        # In 0.4.2, roles are stored in st.session_state['roles']
-        # This is typically a list, so we take the first one or default to 'expert'
-        roles = st.session_state.get('roles', [])
-        if roles:
-            st.session_state['user_role'] = roles[0]
-        else:
-            st.session_state['user_role'] = 'expert'
+        # Render the login widget
+        authentication_status = authenticator.login(
+            location='main', 
+            fields={'Form name': form_name}
+        )
+        
+        if st.session_state.get('authentication_status'):
+            st.session_state['authenticator'] = authenticator
+            username = st.session_state['username']
             
-        return True
-    
-    # If not logged in, we return False. 
-    # Importantly, the authenticator.login() call above already rendered the form.
+            # Record first login activation
+            if clear_first_login_flag(username):
+                push_database(f"User {username} activated (first login)")
+            
+            # Handle plural roles list
+            roles = st.session_state.get('roles', [])
+            st.session_state['user_role'] = roles[0] if roles else 'EXPERT'
+                
+            return True
+
+    except Exception as e:
+        # Emergency Recovery: If the authenticator itself crashes (likely cookie conflict)
+        st.error(f"🔑 Authentication Error: {e}")
+        if st.button("✨ Clear Session & Reset"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+            
     return False
 
 def logout():
-    # 1. Clear Streamlit-Authenticator session
+    """Unified Logout"""
+    # 1. Clear authenticator internal state
     if 'authenticator' in st.session_state:
-        # In unrendered mode, it clears the cookies/state without showing the button
-        st.session_state['authenticator'].logout(location='unrendered')
+        try:
+            st.session_state['authenticator'].logout(location='unrendered')
+        except:
+            pass
     
-    # 2. Force clear our custom session keys (for Simple Auth or stauth fallback)
-    keys_to_clear = ['username', 'user_role', 'authentication_status', 'roles', 'name', 'logout']
-    for key in keys_to_clear:
-        if key in st.session_state:
+    # 2. Aggressively wipe the session state
+    # We delete everything EXCEPT the bridge/sync keys so the next user doesn't have to re-pull
+    keep_keys = ['db_synced', 'db_sha']
+    for key in list(st.session_state.keys()):
+        if key not in keep_keys:
             del st.session_state[key]
     
+    # 3. Trigger a rerun
     st.rerun()

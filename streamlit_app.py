@@ -5,47 +5,76 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 import streamlit as st
-import pandas as pd
-from db_core import init_db
+from db_core import init_db, seed_enums
 from auth_manager import login_ui, logout
 from admin_page import admin_page
 from github_bridge import pull_database
 from locking_page import locking_page
 
+# -----------------------
 # Page Configuration
+# -----------------------
 st.set_page_config(page_title="IDP Housing Suitability Database", layout="wide")
 
-# Handle GitHub Synchronization (Pull latest on start)
+# -----------------------
+# GitHub Sync (Pull latest DB)
+# -----------------------
 if 'db_synced' not in st.session_state:
     if pull_database():
         st.session_state['db_synced'] = True
 
+# -----------------------
 # Initialize Database
+# -----------------------
 init_db()
+seed_enums()  # Populate TBL_ENUM / TBL_ENUM_I18N (safe to re-run)
 
-# Requirement: Multi-user Login
-if login_ui():
+# -----------------------
+# Handle logout trigger via session state
+# -----------------------
+if st.session_state.get("logout_trigger"):
+    st.session_state["authentication_status"] = None  # reset login
+    st.session_state["logout_trigger"] = False
+    st.rerun()  # force Streamlit to restart script from top
+
+# -----------------------
+# Login
+# -----------------------
+logged_in = login_ui()  # Always call login_ui at top
+
+if logged_in:
+    # -----------------------
     # Sidebar Navigation & Logout
+    # -----------------------
     st.sidebar.title(f"Welcome, {st.session_state['username']}")
-    st.sidebar.markdown(f"**Role:** {st.session_state.get('user_role', 'expert')}")
-    
-    # Unified Logout Button
-    if st.sidebar.button("Log Out"):
-        logout()
-        
-    st.sidebar.divider()
-    
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Dashboard", "Property Entry", "Fieldwork Scheduling", "Account & Admin"])
 
+    # Logout button
+    if st.sidebar.button("Log Out"):
+        # Set session flag to trigger rerun
+        st.session_state["logout_trigger"] = True
+        logout()  # Clears session keys
+        st.rerun()
+
+    st.sidebar.divider()
+    st.sidebar.title("Navigation")
+    page = st.sidebar.radio(
+        "Go to",
+        ["Dashboard", "Property Entry", "Fieldwork Scheduling", "Account & Admin"]
+    )
+
+    # -----------------------
     # Main Header
+    # -----------------------
     st.title("IDP Housing Suitability Database")
     st.markdown("### Ukraine Residential Refitting Project")
 
+    # -----------------------
+    # Page Content
+    # -----------------------
     if page == "Dashboard":
         st.header("Project Overview")
         st.info("Project status updates and high-level metrics.")
-        
+
         col1, col2, col3 = st.columns(3)
         col1.metric("Properties Tracked", "0")
         col2.metric("Scheduled Visits", "0")
@@ -61,5 +90,9 @@ if login_ui():
 
     elif page == "Account & Admin":
         admin_page()
+
 else:
-    st.stop()
+    # -----------------------
+    # Not logged in -> show login UI
+    # -----------------------
+    st.warning("Please log in to continue.")

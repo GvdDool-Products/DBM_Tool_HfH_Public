@@ -83,7 +83,8 @@ def pull_database():
         st.sidebar.success(f"✅ DB Synced (v.{contents.sha[:7]})")
         return True
     except Exception as e:
-        st.sidebar.error(f"❌ Pull failed: {e}")
+        st.sidebar.error(f"❌ Pull failed 1: {e}")
+        print(f"DEBUG: Pull failed exception: {e}")  # Improved logging
         return False
 
 def push_database(commit_message="Update database from Streamlit App"):
@@ -93,6 +94,11 @@ def push_database(commit_message="Update database from Streamlit App"):
     config = get_config()
     if not config:
         return False
+
+    # Check if running locally/without tokens - skip push
+    if not config.get("token") or not config.get("repo_name"):
+        print("DEBUG: Skipping GitHub push (runner is local/no token).")
+        return True
 
     try:
         g = Github(config["token"])
@@ -131,5 +137,6 @@ def push_database(commit_message="Update database from Streamlit App"):
         return True
         
     except Exception as e:
-        st.sidebar.error(f"❌ Push failed: {e}")
+        st.sidebar.error(f"❌ Push failed 2: {e}")
+        print(f"DEBUG: Push failed exception: {e}")
         return False
