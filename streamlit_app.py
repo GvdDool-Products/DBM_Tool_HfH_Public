@@ -7,9 +7,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 import streamlit as st
 from db_core import init_db, seed_enums
 from auth_manager import login_ui, logout
-from admin_page import admin_page
+from st_admin_page import admin_page
 from github_bridge import pull_database
-from locking_page import locking_page
+from st_locking_page import locking_page
+from st_inspection_page import inspection_page
 
 # -----------------------
 # Page Configuration
@@ -59,7 +60,7 @@ if logged_in:
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Go to",
-        ["Dashboard", "Property Entry", "Fieldwork Scheduling", "Account & Admin"]
+        ["Dashboard", "Property Inspection", "Fieldwork Scheduling", "Account & Admin"]
     )
 
     # -----------------------
@@ -80,9 +81,8 @@ if logged_in:
         col2.metric("Scheduled Visits", "0")
         col3.metric("Completed Inspections", "0")
 
-    elif page == "Property Entry":
-        st.header("Property Registration")
-        st.write("Expert data entry for real estate suitability.")
+    elif page == "Property Inspection":
+        inspection_page()
 
     elif page == "Fieldwork Scheduling":
         st.header("Fieldwork Management")

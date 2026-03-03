@@ -1,0 +1,355 @@
+import streamlit as st
+from db_core import (
+    get_connection, get_enum_options, get_address_geometry,
+    update_building_geometry, update_building_geom_flag,
+    get_geometry_data
+)
+from github_bridge import push_database
+
+try:
+    import folium
+    from streamlit_folium import st_folium
+    import shapely.wkt
+except ImportError:
+    folium = None
+    st_folium = None
+    shapely = None
+
+def building_page(property_id):
+    """
+    Building Preparation Page
+    =========================
+    Purpose: Create a complete 'before' snapshot of the building record
+    prior to fieldwork scheduling.
+
+    Data sources and their role:
+    ------------------------------------------------------------
+    TBL_CORE_PROPERTY
+        - ID_COMPLEX_FLAG      : If True, multiple buildings exist on this
+                                 property. Enables 'Add Building' button and
+                                 renders a building selector above the form.
+        - GEOM_PROP_CREATED    : Flag indicating the parcel boundary polygon
+                                 has been captured and validated.
+        - ID_PROPERTY_GEOM     : FK to TBL_CORE_GEOMETRY — parcel boundary
+        - ID_ADDRESS_GEOM      : FK to TBL_CORE_GEOMETRY — address point
+
+    TBL_CORE_ADDRESS
+        - ADDR_TYPE            : Determines the role of the address point on
+                                 the map. PHYSICAL = grey marker (postal and
+                                 entrance are the same). Other = blue marker
+                                 (entrance point separately required).
+        - ADDR_GEOM_CREATED    : Flag indicating the address point has been
+                                 geocoded and validated by the user.
+
+    TBL_CORE_BUILDING
+        - SYS_BLD_ID           : Primary key — identifies which building
+                                 record is being edited (important for
+                                 complex/multi-building properties).
+        - ID_BUILDING_GEOM     : FK to TBL_CORE_GEOMETRY — building footprint
+        - GEOM_BLD_CREATED     : Flag indicating the building footprint
+                                 polygon has been captured and validated.
+        - BLD_TYPE, BLD_NC_CODE, BLD_FLOORS,
+          BLD_TOTAL_AREA, BLD_LIVING_AREA
+                               : Static office-knowable fields — populated
+                                 before fieldwork from existing records,
+                                 cadastral data, or desk research.
+
+    Map layer summary:
+    ------------------------------------------------------------
+    Layer               Source table         Validation flag
+    Address point       TBL_CORE_ADDRESS     ADDR_GEOM_CREATED
+    Parcel boundary     TBL_CORE_PROPERTY    GEOM_PROP_CREATED
+    Building footprint  TBL_CORE_BUILDING    GEOM_BLD_CREATED
+
+    Geometry state logic:
+    ------------------------------------------------------------
+    point_ready   = ADDR_GEOM_CREATED == 1
+    polygon_ready = GEOM_BLD_CREATED  == 1
+    parcel_ready  = GEOM_PROP_CREATED == 1
+
+    ADDR_TYPE == PHYSICAL → grey marker (address is the entrance)
+    ADDR_TYPE != PHYSICAL → blue marker (entrance separately captured)
+    """
+
+    st.markdown("### 🏗️ Building Preparation")
+    st.caption("Complete the building record before scheduling fieldwork.")
+
+    # ------------------------------------------------------------------
+    # DATA LOADING
+    # Load property, address and all building records linked to this
+    # property. b_list is a list to support complex/multi-building
+    # properties where ID_COMPLEX_FLAG = 1.
+    # ------------------------------------------------------------------
+    conn = get_connection()
+    c = conn.cursor()
+
+    # Property record — geometry FKs and complex flag
+    c.execute("SELECT * FROM TBL_CORE_PROPERTY WHERE SYS_PROPERTY_ID = ?", (property_id,))
+    row  = c.fetchone()
+    cols = [d[0] for d in c.description]
+    p_dict = dict(zip(cols, row)) if row else {}
+
+    # Address record — addr_type and geometry validation flag
+    c.execute("SELECT * FROM TBL_CORE_ADDRESS WHERE FK_PROPERTY_ID = ?", (property_id,))
+    row  = c.fetchone()
+    cols = [d[0] for d in c.description]
+    a_dict = dict(zip(cols, row)) if row else {}
+
+    # Building records — list supports single and complex properties
+    c.execute("SELECT * FROM TBL_CORE_BUILDING WHERE FK_PROPERTY_ID = ?", (property_id,))
+    rows = c.fetchall()
+    cols = [d[0] for d in c.description]
+    b_list = [dict(zip(cols, row)) for row in rows]
+
+    conn.close()
+
+    # ------------------------------------------------------------------
+    # GEOMETRY STATE
+    # Derived from validation flags and address type.
+    # Used to drive map display and status indicators.
+    # ------------------------------------------------------------------
+    point_ready  = bool(a_dict.get('ADDR_GEOM_CREATED', 0))
+    parcel_ready = bool(p_dict.get('GEOM_PROP_CREATED', 0))
+    is_complex   = bool(p_dict.get('ID_COMPLEX_FLAG', 0))
+    addr_type    = a_dict.get('ADDR_TYPE', 'UNKNOWN')
+
+    # Point marker style — physical address doubles as entrance point
+    point_style  = 'physical' if addr_type == 'PHYSICAL' else 'entrance'
+    
+    with st.form("building_form"):
+        col_info, col_map = st.columns([2, 4])
+
+        with col_info:
+            # Building fields here
+            st.markdown("**Building Details**")
+            
+            # ----------------------------------------------------------
+            # VALIDATION TOGGLE
+            # ----------------------------------------------------------
+            if b_list:
+                b_current = b_list[0] # For now, single building focus
+                b_geom_id = b_current.get('ID_BUILDING_GEOM')
+                
+                # Check geometry presence
+                existing_geom = get_geometry_data(b_geom_id)
+                has_geom = bool(existing_geom and existing_geom.get('wkt'))
+                
+                is_validated = st.toggle(
+                    "✅ Footprint Validated",
+                    value=bool(b_current.get('GEOM_BLD_CREATED', 0)),
+                    disabled=not has_geom,
+                    help="Enable this only if the building footprint on the map is correct."
+                )
+                if not has_geom:
+                    st.caption("⚠️ No footprint stored yet. Use the tool on the map to find one.")
+            
+        
+        # ------------------------------------------------------------------
+        # DEBUG SUMMARY — remove before production
+        # ------------------------------------------------------------------
+        with st.expander("🔍 Debug: Data Summary", expanded=True):
+            col_d1, col_d2, col_d3 = st.columns(3)
+            with col_d1:
+                st.markdown("**Property**")
+                st.write(f"Complex: {is_complex}")
+                st.write(f"Parcel ready: {parcel_ready}")
+                st.write(f"ID_PROPERTY_GEOM: {p_dict.get('ID_PROPERTY_GEOM', 'None')[:8]}...")
+                st.write(f"ID_ADDRESS_GEOM: {p_dict.get('ID_ADDRESS_GEOM', 'None')[:8]}...")
+            with col_d2:
+                st.markdown("**Address**")
+                st.write(f"Type: {addr_type}")
+                st.write(f"Point ready: {point_ready}")
+                st.write(f"Point style: {point_style}")
+            with col_d3:
+                st.markdown("**Buildings**")
+                st.write(f"Count: {len(b_list)}")
+                for i, b in enumerate(b_list):
+                    st_bld_geom_id = b.get('ID_BUILDING_GEOM')
+                    has_geom = False
+                    if st_bld_geom_id:
+                        g_check = get_geometry_data(st_bld_geom_id)
+                        has_geom = bool(g_check and g_check.get('wkt'))
+                    st.write(f"BLD {i+1}: GEOM={has_geom}, VALID={bool(b.get('GEOM_BLD_CREATED', 0))}")
+        # ------------------------------------------------------------------
+
+
+
+        with col_map:
+            # ----------------------------------------------------------
+            # MAP DISPLAY
+            # Only render map if we have at least one confirmed point.
+            # Centre priority: address point > Ukraine fallback
+            # ----------------------------------------------------------
+            
+            # Determine if we can render a map
+            map_centre = None
+            zoom       = 6  # country level fallback
+
+            if point_ready:
+                geom = get_address_geometry(a_dict.get('ID_ADDR_GEOM'))
+                if geom:
+                    map_centre = [geom['latitude'], geom['longitude']]
+                    zoom       = 16
+
+            if map_centre is None:
+                st.info("🗺️ Map will appear once an address point is confirmed.")
+            
+            elif folium and st_folium:
+                m = folium.Map(location=map_centre, zoom_start=zoom)
+
+                # Address / entrance point marker
+                if point_style == 'physical':
+                    folium.Marker(
+                        location=map_centre,
+                        tooltip="Physical Address",
+                        icon=folium.Icon(color='gray', icon='home')
+                    ).add_to(m)
+                else:
+                    folium.Marker(
+                        location=map_centre,
+                        tooltip="Entrance Point",
+                        icon=folium.Icon(color='blue', icon='flag')
+                    ).add_to(m)
+
+                # ----------------------------------------------------------
+                # Stored Geometry Visualization
+                # ----------------------------------------------------------
+                for b_item in b_list:
+                    b_geom_id = b_item.get('ID_BUILDING_GEOM')
+                    b_validated = bool(b_item.get('GEOM_BLD_CREATED', 0))
+                    
+                    if b_geom_id:
+                        g_data = get_geometry_data(b_geom_id)
+                        if g_data and g_data.get('wkt') and shapely:
+                            # Style based on validation status
+                            if b_validated:
+                                style = {
+                                    'fillColor': '#2ecc71', # Green
+                                    'color':     '#27ae60',
+                                    'weight':    2,
+                                    'fillOpacity': 0.5
+                                }
+                                status_label = "Validated Footprint"
+                            else:
+                                style = {
+                                    'fillColor': '#3498db', # Blue
+                                    'color':     '#2980b9',
+                                    'weight':    2,
+                                    'fillOpacity': 0.3,
+                                    'dashArray': '5, 5'
+                                }
+                                status_label = "Draft/Fieldwork Required"
+
+                            # Convert WKT to GeoJSON for Folium
+                            try:
+                                geom_obj = shapely.wkt.loads(g_data['wkt'])
+                                bld_id_label = str(b_item.get('SYS_BLD_ID', ''))[:4]
+                                
+                                folium.GeoJson(
+                                    geom_obj,
+                                    name=f"Building {bld_id_label}",
+                                    tooltip=status_label,
+                                    style_function=lambda x, s=style: s
+                                ).add_to(m)
+                            except Exception as e:
+                                st.error(f"Error rendering building {b_item.get('SYS_BLD_ID')}: {e}")
+
+                # TODO: parcel boundary polygon overlay
+                
+                # ----------------------------------------------------------
+                # OSM Footprint Trigger
+                # Only check if the building has NO stored geometry at all
+                # ----------------------------------------------------------
+                if len(b_list) == 1 and point_ready:
+                    b = b_list[0]
+                    bld_geom_id = b.get('ID_BUILDING_GEOM')
+
+                    # Check if we already have a geometry record (even if draft)
+                    existing_geom = get_geometry_data(bld_geom_id)
+                    has_geom = existing_geom and existing_geom.get('wkt')
+
+                    if not b.get('GEOM_BLD_CREATED', 0) and not has_geom:
+                        
+                        # Fetch only if not already in session state
+                        # OR if the building has changed (different bld_geom_id)
+                        if 'pending_footprint' not in st.session_state or \
+                           st.session_state.get('pending_bld_geom_id') != bld_geom_id:
+                            # Clear stale footprint from previous property
+                            st.session_state.pop('pending_footprint', None)
+                            
+                            from utils.auxiliaryDataImport import fetch_osm_footprint
+                            footprint = fetch_osm_footprint(map_centre[0], map_centre[1])
+
+                            st.session_state.pending_footprint    = footprint
+                            st.session_state.pending_bld_geom_id = bld_geom_id
+
+                        footprint = st.session_state.get('pending_footprint')
+
+                        if footprint:
+                            folium.GeoJson(
+                                footprint,
+                                name="OSM Suggested Footprint",
+                                style_function=lambda x: {
+                                    'fillColor': '#f39c12',
+                                    'color':     '#d35400',
+                                    'weight':    2,
+                                    'fillOpacity': 0.5
+                                }
+                            ).add_to(m)
+                            st.caption("🏠 Building footprint found on OpenStreetMap — please verify.")
+                        else:
+                            st.caption("No matching building footprint found on OSM for this location.")
+
+                st_folium(m, use_container_width=True, height=400, key="building_map")
+
+            else:
+                st.warning("⚠️ Map unavailable — folium not installed.")
+        
+
+        col_btn, col_status = st.columns([3, 3])
+        with col_btn:
+            submitted = st.form_submit_button("Update Building Details")
+        with col_status:
+            st.markdown("📍 Geometry status here")
+
+        # ----------------------------------------------------------
+    # STORE / DISCARD Suggestion — outside form, below map
+    # ----------------------------------------------------------
+    if st.session_state.get('pending_footprint') and b_list:
+        b = b_list[0]
+        bld_geom_id = st.session_state.pending_bld_geom_id
+
+        if not b.get('GEOM_BLD_CREATED', 0):
+            col_acc, col_rej = st.columns(2)
+
+            with col_acc:
+                if st.button("📂 Store Suggested Footprint",
+                              type="primary",
+                              use_container_width=True,
+                              help="Saves the OSM footprint to the database as a draft."):
+                    if update_building_geometry(bld_geom_id,
+                                                st.session_state.pending_footprint):
+                        # Store as DRAFT (is_accepted=False)
+                        update_building_geom_flag(bld_geom_id, is_accepted=False)
+                        st.session_state.pop('pending_footprint', None)
+                        st.session_state.pop('pending_bld_geom_id', None)
+                        push_database(f"Building footprint stored as draft for {property_id}")
+                        st.rerun()
+
+            with col_rej:
+                if st.button("🗑️ Discard Suggestion",
+                              use_container_width=True,
+                              help="Ignore this OSM suggestion. Does not affect saved data."):
+                    st.session_state.pop('pending_footprint', None)
+                    st.session_state.pop('pending_bld_geom_id', None)
+                    st.rerun()
+
+    if submitted:
+        # Update validation flag from toggle inside the form
+        if b_list:
+            b_current = b_list[0]
+            b_geom_id = b_current.get('ID_BUILDING_GEOM')
+            update_building_geom_flag(b_geom_id, is_accepted=is_validated)
+            
+        push_database(f"Updated building details and validation for {property_id}")
+        st.success("✅ Building details and validation status saved.")
