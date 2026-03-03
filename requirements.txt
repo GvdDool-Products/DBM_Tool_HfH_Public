@@ -12,7 +12,7 @@ streamlit-folium
 
 # Backend & Integration
 PyGithub
-sqlite3-binary  # If needed, though usually part of stdlib
+shapely
 GitPython
 
 # Development & Testing (Optional)
