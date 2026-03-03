@@ -5,14 +5,19 @@ streamlit-authenticator
 pandas
 requests
 pytz
+
 # Geocoding & Mapping
 geopy
 folium
 streamlit-folium
+osmnx
+geopandas
+
 # Backend & Integration
 PyGithub
 shapely
 GitPython
+
 # Development & Testing (Optional)
 # pytest
 # matplotlib
