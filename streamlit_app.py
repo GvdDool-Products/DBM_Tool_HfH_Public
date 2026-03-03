@@ -20,15 +20,24 @@ st.set_page_config(page_title="IDP Housing Suitability Database", layout="wide")
 # -----------------------
 # GitHub Sync (Pull latest DB)
 # -----------------------
+pull_success = False
 if 'db_synced' not in st.session_state:
-    if pull_database():
-        st.session_state['db_synced'] = True
+    pull_success = pull_database()
+    st.session_state['db_synced'] = pull_success
+else:
+    pull_success = st.session_state['db_synced']
 
 # -----------------------
 # Initialize Database
 # -----------------------
-init_db()
-seed_enums()  # Populate TBL_ENUM / TBL_ENUM_I18N (safe to re-run)
+# ONLY initialize if we pulled successfully OR we are running locally.
+# This prevents creating a "blank" DB if the connection to GitHub fails.
+if pull_success or os.environ.get("STREAMLIT_RUNTIME_CHECK") != "cloud":
+    init_db()
+    seed_enums()  # Populate TBL_ENUM / TBL_ENUM_I18N (safe to re-run)
+else:
+    st.error("🛑 Database Sync Failed. Initialization halted to prevent data loss.")
+    st.stop()
 
 # -----------------------
 # Handle logout trigger via session state

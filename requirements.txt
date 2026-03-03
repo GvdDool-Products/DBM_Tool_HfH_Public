@@ -1,4 +1,3 @@
-
 # Core Application & UI
 streamlit
 streamlit-authenticator

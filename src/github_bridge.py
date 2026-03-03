@@ -59,32 +59,32 @@ def pull_database():
         g = Github(config["token"])
         repo = g.get_repo(config["repo_name"])
                 
-        # Check if the database file exists in the repo
+        # 1. Get file metadata
         contents = repo.get_contents(config["db_path"], ref=config["branch"])
-        if contents:
-            st.write("✅ DATABASE FOUND in GitHub repo")
-        else:
-            st.write("❌ DATABASE NOT FOUND in GitHub repo")
-            return False
-
-        # Ensure local folder exists
+        
+        # 2. Ensure local folder exists
         local_folder = os.path.dirname(config["db_path"])
         os.makedirs(local_folder, exist_ok=True)
 
-        # Write file locally
-        with open(config["db_path"], "wb") as f:
-            f.write(contents.decoded_content)
-        st.write(f"✅ DATABASE COPIED LOCALLY to {config['db_path']}")
+        # 3. USE RAW DOWNLOAD for binary files (fixes "unsupported encoding: none")
+        import requests
+        headers = {"Authorization": f"token {config['token']}"}
+        response = requests.get(contents.download_url, headers=headers)
+        
+        if response.status_code == 200:
+            with open(config["db_path"], "wb") as f:
+                f.write(response.content)
+            st.write(f"✅ DATABASE SYNCED (Raw Download) to {config['db_path']}")
+        else:
+            st.error(f"❌ Raw download failed: {response.status_code}")
+            return False
 
         # Store SHA to prevent overwrite conflicts
-        # KEY: Store the SHA of the file we just pulled
         st.session_state['db_sha'] = contents.sha
-        
         st.sidebar.success(f"✅ DB Synced (v.{contents.sha[:7]})")
         return True
     except Exception as e:
-        st.sidebar.error(f"❌ Pull failed 1: {e}")
-        print(f"DEBUG: Pull failed exception: {e}")  # Improved logging
+        st.sidebar.error(f"❌ Pull failed: {e}")
         return False
 
 def push_database(commit_message="Update database from Streamlit App"):
