@@ -1,20 +1,18 @@
+
 # Core Application & UI
 streamlit
 streamlit-authenticator
 pandas
 requests
 pytz
-
 # Geocoding & Mapping
 geopy
 folium
 streamlit-folium
-
 # Backend & Integration
 PyGithub
 shapely
 GitPython
-
 # Development & Testing (Optional)
 # pytest
 # matplotlib
