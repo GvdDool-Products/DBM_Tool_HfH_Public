@@ -259,6 +259,7 @@ def building_page(property_id):
     submitted_suit = False
     submitted_safe = False
     submitted_tech = False
+    submitted_s2 = False
     # Default to current building's fieldwork status if not overridden by the selector
     new_fw_status = current_bld.get('BLD_FIELDWORK_STATUS') or 0
     
