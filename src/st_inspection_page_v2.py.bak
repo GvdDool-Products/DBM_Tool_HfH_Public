@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 from db_core import (
     get_connection, get_enum_options, 
-    add_property, delete_property, update_property_name,
-    update_property_metadata,
+    add_property, delete_property,
+    update_complex_flag,
     update_legal_ownership, update_property_address, 
     update_landplot, update_governance,
     get_address_geometry, update_address_geometry,
@@ -63,15 +63,11 @@ def get_properties_list():
     SELECT 
         p.SYS_PROPERTY_ID, 
         p.ID_ADMIN_UNIT, 
-        COALESCE(i.ENUM_LABEL, p.ID_ADMIN_UNIT) as ADMIN_UNIT_LABEL,
         p.ID_CADASTRAL_NO,
         a.CITY,
         a.ADDR_LINE1
     FROM TBL_CORE_PROPERTY p
     LEFT JOIN TBL_CORE_ADDRESS a ON p.SYS_PROPERTY_ID = a.FK_PROPERTY_ID
-    LEFT JOIN TBL_REF_ENUM e ON e.ENUM_GROUP = 'ADMIN_UNIT' AND e.ENUM_CODE = p.ID_ADMIN_UNIT
-    LEFT JOIN TBL_REF_ENUM_I18N i ON i.FK_ENUM_ID = e.SYS_ENUM_ID AND i.LANGUAGE_CODE = 'en'
-    ORDER BY p.ID_CADASTRAL_NO
     """
     df = pd.read_sql_query(query, conn)
     conn.close()
@@ -164,8 +160,6 @@ def inspection_page():
         st.session_state.active_tab = 0
     if 'draft_addr_location' not in st.session_state:
         st.session_state.draft_addr_location = None
-    if 'edit_addr_mode' not in st.session_state:
-        st.session_state.edit_addr_mode = False
 
     # 1. PROPERTY SELECTION
     properties_df = get_properties_list()
@@ -176,31 +170,20 @@ def inspection_page():
 
     # Create a nice display label for selection
     properties_df['display_label'] = properties_df.apply(
-        lambda x: f"{x['ID_CADASTRAL_NO']} | {x['ADMIN_UNIT_LABEL'] or 'Unknown Region'} ({x['CITY'] or 'No City Data'})", axis=1
+        lambda x: f"{x['ID_CADASTRAL_NO']} | {x['ID_ADMIN_UNIT']} ({x['CITY'] or 'No City Data'})", axis=1
     )
     
-    # Calculate index based on st.session_state.selected_property_id
-    default_index = 0
-    if 'selected_property_id' in st.session_state:
-        matching_rows = properties_df[properties_df['SYS_PROPERTY_ID'] == st.session_state.selected_property_id]
-        if not matching_rows.empty:
-            default_index = int(matching_rows.index[0])
-
-    selected_label = st.selectbox("Select Property to Manage", properties_df['display_label'], index=default_index)
+    selected_label = st.selectbox("Select Property to Manage", properties_df['display_label'])
     selected_id = properties_df[properties_df['display_label'] == selected_label]['SYS_PROPERTY_ID'].values[0]
 
-    # Store IDs for stable reference
-    st.session_state.selected_property_id = selected_id
+    # Store after every render — user click or rerun
     st.session_state.property_index = properties_df['display_label'].tolist().index(selected_label)
 
-    # data management functions: add, edit and delete records:
-    col_add, col_edit, col_del, col_spacer = st.columns([1, 1, 1, 5])
+    # data management functions: add and delete records:
+    col_add, col_del, col_spacer = st.columns([1, 1, 6])
     with col_add:
         if st.button("➕ Add Property", type="secondary"):
             st.session_state.show_add_property = True
-    with col_edit:
-        if st.button("✏️ Edit Property", type="secondary"):
-            st.session_state.show_edit_property = True
     with col_del:
         if st.button("🗑️ Delete Property", type="secondary"):
             st.session_state.show_delete_confirm = True
@@ -213,11 +196,7 @@ def inspection_page():
             with col_a:
                 new_cadastral_no = st.text_input("Cadastral Number")
             with col_b:
-                admin_options = get_enum_options("ADMIN_UNIT")
-                admin_codes = [o[0] for o in admin_options]
-                admin_labels = [o[1] for o in admin_options]
-                selected_admin_label = st.selectbox("Administrative Unit", admin_labels)
-                new_admin_unit = admin_codes[admin_labels.index(selected_admin_label)]
+                new_admin_unit   = st.text_input("Administrative Unit")
             
             col_s, col_c = st.columns([1, 5])
             with col_s:
@@ -229,7 +208,6 @@ def inspection_page():
             new_id = add_property(new_admin_unit, new_cadastral_no)
             if new_id:
                 st.session_state.show_add_property = False
-                st.session_state.selected_property_id = new_id # Focus on new property
                 push_database(f"New property added: {new_id}")
                 st.success(f"✅ Property created successfully.")
                 st.rerun()
@@ -239,47 +217,7 @@ def inspection_page():
             st.session_state.show_add_property = False
             st.rerun()
         ### Add end
-
-    # Edit Property form
-    if st.session_state.get('show_edit_property'):
-        current_row = properties_df[properties_df['SYS_PROPERTY_ID'] == selected_id].iloc[0]
-        with st.form("edit_property_form"):
-            st.subheader(f"Edit Property Details")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                edit_cadastral_no = st.text_input("Cadastral Number", value=current_row['ID_CADASTRAL_NO'] or '')
-            with col_b:
-                admin_options = get_enum_options("ADMIN_UNIT")
-                admin_codes = [o[0] for o in admin_options]
-                admin_labels = [o[1] for o in admin_options]
-                
-                current_admin_code = current_row['ID_ADMIN_UNIT']
-                try:
-                    admin_idx = admin_codes.index(current_admin_code)
-                except ValueError:
-                    admin_idx = 0
-                
-                selected_admin_label = st.selectbox("Administrative Unit", admin_labels, index=admin_idx)
-                edit_admin_unit = admin_codes[admin_labels.index(selected_admin_label)]
-            
-            col_s, col_c = st.columns([1.5, 5])
-            with col_s:
-                submitted_edit = st.form_submit_button("Save Changes", type="primary")
-            with col_c:
-                cancel_edit = st.form_submit_button("Cancel")
-
-        if submitted_edit:
-            if update_property_name(selected_id, edit_admin_unit, edit_cadastral_no):
-                st.session_state.show_edit_property = False
-                push_database(f"Property renamed: {selected_id}")
-                st.success(f"✅ Property updated successfully.")
-                st.rerun()
-            else:
-                st.error("❌ Error updating property.")
-        if cancel_edit:
-            st.session_state.show_edit_property = False
-            st.rerun()
-        ### Edit end
+        
     # Delete confirmation
     if st.session_state.get('show_delete_confirm'):
         st.warning(f"⚠️ Are you sure you want to delete **{selected_label}**? This cannot be undone.")
@@ -359,57 +297,32 @@ def inspection_page():
                     selected_entity_label = st.selectbox("Owner Entity Type", entity_labels, index=own_entity_idx)
                     new_entity = label_to_code_entity.get(selected_entity_label, "UNKNOWN")
 
-                    new_legal_rep = st.text_input("Legal Representative Name (Optional)", 
-                                                 value=l_dict.get('PROP_LEGAL_REP_NAME', '') or '')
-
                 with col2:
+                    new_doc_exists = st.toggle("Legal Document Exists", value=bool(l_dict.get('LEG_DOC_EXIST', 0)))
                     new_consent = st.toggle("Owner Consent Obtained", value=bool(l_dict.get('OWN_CONSENT', 0)))
-                    new_complex = st.toggle("Complex / Multi-Building Property", value=bool(p_dict.get('ID_COMPLEX_FLAG', 0)))
+                    new_complex    = st.toggle("Complex / Multi-Building Property", value=bool(p_dict.get('ID_COMPLEX_FLAG', 0)))
                 
                 new_encumbrances = st.text_area("Encumbrances / Restrictions", value=l_dict.get('ENCUMBRANCES', '') or '')
-
-                # Technical Documentation Section (Moved up to drive Legal Document flag)
-                with st.expander("📜 Property Technical Documentation", expanded=False):
-                    col_doc1, col_doc2 = st.columns(2)
-                    with col_doc1:
-                        new_geodetic_exist = st.toggle("Geodetic Survey (Site) Exists", 
-                                                       value=bool(p_dict.get('PROP_GEODETIC_SURVEY_EXIST', 0)))
-                        new_geodetic_desc  = st.text_input("Geodetic Survey Description", 
-                                                           value=p_dict.get('PROP_GEODETIC_SURVEY_DESC', '') or '')
-                    with col_doc2:
-                        new_geological_exist = st.toggle("Geological Invest. (Soil) Exists", 
-                                                         value=bool(p_dict.get('PROP_GEOLOGICAL_INVEST_EXIST', 0)))
-                        new_geological_desc  = st.text_input("Geological Investigation Description", 
-                                                             value=p_dict.get('PROP_GEOLOGICAL_INVEST_DESC', '') or '')
-
-                    # Quality Check: Legal Document flag removed from here
-                    # Documentation readiness is now tracked at the building level 
-                    # (Geodetic + Geological + BTI).
-                    st.info("ℹ️ Documentation readiness is now tracked at the building level.")
                 
                 ### update legal
-                ### Stage 2 Fields — Unlocked for fieldwork selection
-                with st.expander("🏛️ Land & Legal Status — Stage 2", expanded=False):
+                with st.expander("🏛️ Land & Legal Status — Stage 2"):
+                    st.caption("These fields will be available for editing in Stage 2.")
                     col_land1, col_land2 = st.columns(2)
                     with col_land1:
-                        new_land_use = st.text_input("Land Use Designation",
-                                      value=l_dict.get('LAND_USE_DESIG', '') or '')
-                        new_land_own = st.text_input("Land Ownership Form",
-                                      value=l_dict.get('LAND_OWN_FORM', '') or '')
+                        st.text_input("Land Use Designation",
+                                      value=l_dict.get('LAND_USE_DESIG', '') or '',
+                                      disabled=True)
+                        st.text_input("Land Ownership Form",
+                                      value=l_dict.get('LAND_OWN_FORM', '') or '',
+                                      disabled=True)
                     with col_land2:
-                        new_land_title = st.text_input("Land Title Document Reference",
-                                      value=l_dict.get('LAND_TITLE_DOC', '') or '')
+                        st.text_input("Land Title Document Reference",
+                                      value=l_dict.get('LAND_TITLE_DOC', '') or '',
+                                      disabled=True)
                 ###
                 if st.form_submit_button("Update Legal Info"):
-                    # LEG_DOC_EXIST is now deprecated at this level
-                    if update_legal_ownership(selected_id, new_own_type, new_entity, 
-                                             l_dict.get('LEG_DOC_EXIST', 0), # Preserve old value for now
-                                             new_consent, new_encumbrances,
-                                             land_use=new_land_use, land_own=new_land_own, land_title=new_land_title,
-                                             legal_rep=new_legal_rep):
-                        update_property_metadata(selected_id, new_complex, 
-                                                new_geodetic_exist, new_geodetic_desc,
-                                                new_geological_exist, new_geological_desc)
+                    if update_legal_ownership(selected_id, new_own_type, new_entity, new_doc_exists, new_consent, new_encumbrances):
+                        update_complex_flag(selected_id, new_complex)
                         push_database(f"Legal info updated for {selected_id}")
                         st.success("Legal information updated successfully!")
                         
@@ -422,14 +335,16 @@ def inspection_page():
         ### Tab Address
         with tab_addr:
             a_dict = get_property_skeleton(selected_id).get('address_dict', {})
+    
             st.subheader("Precise Address Information")
+            #a_dict = get_property_skeleton(selected_id).get('address_dict', {})
 
-            # 1. LAYOUT: Colum Layout outside the form for interactivity
+            # 1. LAYOUT: Split Text and Map
             col_info, col_map = st.columns([2, 4])
 
             with col_info:
                 with st.form("address_text_form"):
-                    st.markdown("**Postal Address Details**")
+                    st.markdown("**Postal Address**")
                     new_line1 = st.text_input("Street & Number",
                                             value=a_dict.get('ADDR_LINE1', '') or '',
                                             help="Format: Street Name, Number — e.g. Saksaganskogo, 36")
@@ -458,69 +373,21 @@ def inspection_page():
                     
                     submitted = st.form_submit_button("Update Address Text & Geocode", use_container_width=True)
 
-                # Sync with toggle in col_map
-                edit_mode_active = st.session_state.get('edit_addr_mode', False)
+                st.divider()
+                edit_mode_active = st.toggle(
+                    "✏️ Edit Address Location",
+                    value=st.session_state.get('edit_addr_mode', False),
+                    help="Activating this switch allows you to point to a new location on the map to reposition the address marker.",
+                    key="edit_addr_mode_toggle"
+                )
+                
+                # Sync session state with key
+                st.session_state.edit_addr_mode = edit_mode_active
+                
                 if not edit_mode_active:
                     st.session_state.draft_addr_location = None
 
             with col_map:
-                # -- Map Toolbar Header --
-                tool_col1, tool_col2, tool_col3, tool_col4 = st.columns([1.2, 1, 1, 1])
-                
-                with tool_col1:
-                    if st.session_state.get('pending_geocode'):
-                        st.markdown("⏳ **Pending**")
-                    elif a_dict.get('ADDR_GEOM_CREATED', 0):
-                        st.markdown("✅ **Confirmed**")
-                    else:
-                        st.markdown("📍 **No Geom**")
-                
-                with tool_col2:
-                    edit_mode_active = st.toggle(
-                        "✏️ Edit",
-                        value=st.session_state.edit_addr_mode,
-                        help="Point to a new location on the map.",
-                        key="edit_addr_mode_toggle"
-                    )
-                    st.session_state.edit_addr_mode = edit_mode_active
-
-                has_draft = st.session_state.get('draft_addr_location') is not None
-                
-                with tool_col3:
-                    save_pos = st.button("💾 Save", 
-                                         type="primary", 
-                                         disabled=not (edit_mode_active and has_draft),
-                                         use_container_width=True,
-                                         help="Save the new marker location.")
-                
-                with tool_col4:
-                    reset_pos = st.button("🔄 Reset", 
-                                          disabled=not (edit_mode_active and has_draft),
-                                          use_container_width=True,
-                                          help="Discard the temporary pin.")
-                    if reset_pos:
-                        st.session_state.draft_addr_location = None
-                        st.rerun()
-
-                # -- Handle Save Action --
-                if save_pos:
-                    result = update_address_geometry(
-                        addr_geom_id     = a_dict.get('ID_ADDR_GEOM'),
-                        latitude         = st.session_state.draft_addr_location[0],
-                        longitude        = st.session_state.draft_addr_location[1],
-                        resolved_address = a_dict.get('ADDR_LINE1', 'Manual Entry'),
-                        updated_by       = st.session_state.get('user_email', 'SYSTEM')
-                    )
-                    if result:
-                        st.session_state.draft_addr_location = None
-                        st.session_state.edit_addr_mode = False
-                        push_database(f"Geometry manually updated for {selected_id}")
-                        st.success("✅ Marker location saved successfully!")
-                        activate_tab('address', property_index=st.session_state.get('property_index', 0))
-                        st.rerun()
-                    else:
-                        st.error("❌ Error saving manual geometry.")
-
                 if st.session_state.get('pending_geocode') and folium and st_folium:
                     result = st.session_state.pending_geocode
                     m = folium.Map(
@@ -532,24 +399,12 @@ def inspection_page():
                         tooltip=result['resolved_address'],
                         icon=folium.Icon(color='orange', icon='question-sign')
                     ).add_to(m)
-                    
-                    st_folium(m, use_container_width=True, height=500, key="pending_map")
                     st.caption(f"📍 Resolved: {result['resolved_address']}")
+                    st_folium(m, use_container_width=True, height=500, key="pending_map")
                     
-                    if st.button("📍 Validate Address Location", type="primary", use_container_width=True):
-                        result = update_address_geometry(
-                            addr_geom_id     = st.session_state.pending_geom_id,
-                            latitude         = st.session_state.pending_geocode['latitude'],
-                            longitude        = st.session_state.pending_geocode['longitude'],
-                            resolved_address = st.session_state.pending_geocode['resolved_address'],
-                            updated_by       = st.session_state.get('user_email', 'SYSTEM')
-                        )
-                        
-                        push_database(f"Geometry validated for {selected_id}")
-                        st.session_state.pending_geocode = None
-                        st.session_state.pending_geom_id = None
-                        activate_tab('address', property_index=st.session_state.get('property_index', 0))
-                        st.rerun()
+                    if st.button("📍 Confirm Geocoded Location", type="primary", use_container_width=True):
+                        # DB logic later
+                        pass
 
                 elif a_dict.get('ADDR_GEOM_CREATED', 0) and folium and st_folium:
                     geom = get_address_geometry(a_dict.get('ID_ADDR_GEOM'))
@@ -563,48 +418,37 @@ def inspection_page():
 
                         m = folium.Map(location=[display_lat, display_lng], zoom_start=18 if is_draft else 16)
                         
-                        # Original Marker
-                        folium.Marker(
-                            location=[geom['latitude'], geom['longitude']],
-                            tooltip="Original Location",
-                            icon=folium.Icon(color='green', icon='home', opacity=0.6 if is_draft else 1.0)
-                        ).add_to(m)
-                        
-                        # Temporary Pin
                         if is_draft:
-                            folium.Marker(
-                                location=[display_lat, display_lng],
-                                tooltip="New Temporary Location (Unsaved)",
-                                icon=folium.Icon(color='orange', icon='info-sign')
-                            ).add_to(m)
+                            folium.Marker(location=[geom['latitude'], geom['longitude']], tooltip="Original", icon=folium.Icon(color='gray', icon='home', opacity=0.5)).add_to(m)
+                            folium.Marker(location=[display_lat, display_lng], tooltip="New (Unsaved)", icon=folium.Icon(color='orange', icon='info-sign')).add_to(m)
+                        else:
+                            folium.Marker(location=[geom['latitude'], geom['longitude']], tooltip=a_dict.get('ADDR_LINE1', ''), icon=folium.Icon(color='green', icon='home')).add_to(m)
                         
                         map_output = st_folium(m, use_container_width=True, height=500, key="confirmed_map")
                         
                         if edit_mode_active and map_output.get("last_clicked"):
-                            clicked = map_output["last_clicked"]
-                            st.session_state.draft_addr_location = (clicked["lat"], clicked["lng"])
+                            st.session_state.draft_addr_location = (map_output["last_clicked"]["lat"], map_output["last_clicked"]["lng"])
                             st.rerun()
-
-                        # -- Coordinate Display Row (Stable placement below map) --
-                        if edit_mode_active:
-                            st.divider()
-                            st.markdown("**📍 New Placement Coordinates:**")
-                            c_lat, c_lon = st.columns(2)
-                            if st.session_state.draft_addr_location:
-                                d_lat, d_lon = st.session_state.draft_addr_location
-                                c_lat.markdown(f"**Latitude:** `{d_lat:.6f}`")
-                                c_lon.markdown(f"**Longitude:** `{d_lon:.6f}`")
-                            else:
-                                c_lat.markdown(f"**Latitude:** `0.000000`")
-                                c_lon.markdown(f"**Longitude:** `0.000000`")
-                                st.info("👆 *Click on the map to set the new location*")
                 else:
                     st.info("🗺️ Map will appear here once a location is found.")
+
+                # Action buttons for map
+                if edit_mode_active:
+                    c1, c2 = st.columns(2)
+                    has_draft = st.session_state.get('draft_addr_location') is not None
+                    with c1:
+                        if st.button("💾 Save Position", type="primary", disabled=not has_draft, use_container_width=True):
+                            # DB logic later
+                            pass
+                    with c2:
+                        if st.button("🔄 Reset", disabled=not has_draft, use_container_width=True):
+                            st.session_state.draft_addr_location = None
+                            st.rerun()
 
             if submitted:
                 if update_property_address(selected_id, new_line1, new_line2,
                             new_city, new_postcode, new_country,
-                            new_addr_type):
+                            new_addr_type):  # Adding new_addr_type
                     
                     reset_address_geometry(
                         addr_geom_id = a_dict.get('ID_ADDR_GEOM'),
@@ -624,10 +468,28 @@ def inspection_page():
                         st.warning("⚠️ Address saved but location could not be found.")
                     
                     push_database(f"Address updated for {selected_id}")
-                    activate_tab('address', property_index=st.session_state.get('property_index', 0))
+                    activate_tab('address')
                     st.rerun()
                 else:
                     st.error("❌ Error saving address.")
+            
+            if validate:
+                result = update_address_geometry(
+                    addr_geom_id     = st.session_state.pending_geom_id,
+                    latitude         = st.session_state.pending_geocode['latitude'],
+                    longitude        = st.session_state.pending_geocode['longitude'],
+                    resolved_address = st.session_state.pending_geocode['resolved_address'],
+                    updated_by       = st.session_state.get('user_email', 'SYSTEM')
+                )
+                
+                push_database(f"Geometry validated for {selected_id}")
+                st.session_state.pending_geocode = None
+                st.session_state.pending_geom_id = None
+                
+                #activate_tab('address')
+                activate_tab('address', property_index=st.session_state.get('property_index', 0))
+                st.rerun()
+        
         ### Tab Land
         with tab_land:
             st.subheader("Land Plot Characteristics")
@@ -644,55 +506,29 @@ def inspection_page():
                     new_intended_use = st.text_input("Intended Use", 
                                                       value=ln_dict.get('LAND_INTENDED_USE', '') or '')
 
-                with st.expander("🔍 Inspection / Pre-Fieldwork Investigation — Stage 2", expanded=True):
+                with st.expander("🔍 Inspection / Fieldwork Results — Stage 2"):
                     st.caption("These fields will be completed during fieldwork in Stage 2.")
                     col_f1, col_f2 = st.columns(2)
                     with col_f1:
-                        new_factual_use = st.text_input("Factual Use", 
-                                      value=ln_dict.get('LAND_FACTUAL_USE', '') or '')
-                        new_vegetation = st.text_input("Vegetation", 
-                                      value=ln_dict.get('LAND_VEGETATION', '') or '')
+                        st.text_input("Factual Use", 
+                                      value=ln_dict.get('LAND_FACTUAL_USE', '') or '',
+                                      disabled=True)
+                        st.text_input("Vegetation", 
+                                      value=ln_dict.get('LAND_VEGETATION', '') or '',
+                                      disabled=True)
                     with col_f2:
-                        new_temp_struct = st.checkbox("Temporary Structures Present", 
-                                    value=bool(ln_dict.get('LAND_TEMP_STRUCT', 0)))
+                        st.checkbox("Temporary Structures Present", 
+                                    value=bool(ln_dict.get('LAND_TEMP_STRUCT', 0)),
+                                    disabled=True)
 
-                with st.expander("🏙️ Surrounding Infrastructure — Stage 3", expanded=True):
-                    st.caption("Availability of surrounding/supporting infrastructure.")
-                    col_i1, col_i2 = st.columns(2)
-                    with col_i1:
-                        new_road_access = st.toggle("Access roads/approaches and public transport", 
-                                                   value=bool(ln_dict.get('LAND_ROAD_ACCESS', 0)))
-                        new_preschool = st.toggle("Preschool facility", 
-                                                 value=bool(ln_dict.get('LAND_PRESCHOOL', 0)))
-                        new_school = st.toggle("Secondary school facility", 
-                                              value=bool(ln_dict.get('LAND_SCHOOL', 0)))
-                        new_amenity = st.toggle("Sufficient land area for service/amenity areas", 
-                                               value=bool(ln_dict.get('LAND_AMENITY_SPACE', 0)))
-                    with col_i2:
-                        new_healthcare = st.toggle("Healthcare facility", 
-                                                  value=bool(ln_dict.get('LAND_HEALTHCARE', 0)))
-                        new_social = st.toggle("Social services", 
-                                              value=bool(ln_dict.get('LAND_SOCIAL_SERVICES', 0)))
-                        
-                        # Spacer to align Parking with Amenity Space in the left column
-                        st.markdown("<div style='height: 45px;'></div>", unsafe_allow_html=True)
-                        
-                        new_parking = st.toggle("Availability of parking spaces", 
-                                               value=bool(ln_dict.get('LAND_PARKING', 0)))
-                    
-                    new_infra_notes = st.text_area("Infrastructure Description / Notes", 
-                                                  value=ln_dict.get('LAND_INFRA_NOTES', '') or '',
-                                                  height=150)
-
+                # TODO: excluding the Phase 2 fields, as these are not available at this stage
+                # Update the fields when the data is available and form is agreed
                 if st.form_submit_button("Update Land Plot"):
-                    if update_landplot(selected_id, new_size, new_cat, new_intended_use, 
-                                       new_factual_use, new_vegetation, new_temp_struct,
-                                       new_road_access, new_preschool, new_school, 
-                                       new_healthcare, new_social, 
-                                       new_amenity, new_parking, new_infra_notes):
+                    if update_landplot(selected_id, new_size, new_cat, new_intended_use):
                         push_database(f"Land plot updated for {selected_id}")
                         st.success("Land plot info updated successfully!")
                         
+                        #activate_tab('land')
                         activate_tab('land', property_index=st.session_state.get('property_index', 0))
                         st.rerun()
                     else:

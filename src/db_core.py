@@ -47,7 +47,7 @@ def init_db():
     # 3.  TBL_CORE_LEGAL_OWNERSHIP (Legal Ownership)
     # 4.  TBL_CORE_BUILDING (Building)
     # 5.  TBL_CORE_INSPECTION (Building Inspection)
-    # 6.  TBL_CORE_INSPECTION_MEDIA (Inspection Media)
+    # 6.  TBL_CORE_BUILDING_MEDIA (Building Media Gallery)
     # 7.  TBL_CORE_SUITABILITY (Suitability)
     # 8.  TBL_CORE_OCCUPANCY (Occupancy)
     # 9.  TBL_CORE_SAFETY (Safety)
@@ -65,6 +65,7 @@ def init_db():
     # 17. TBL_LINK_ADDRESS_ADMIN_REGION (Admin Boundary Mapping)
     # 18. TBL_REF_ENUM (Reference Data - Enum Master)
     # 19. TBL_REF_ENUM_I18N (Reference Data - Translations)
+    # 20. TBL_CORE_BUILDING_TECH_AUDIT (Technical Audit)
     # ------------------------------------------------------------------
 
     # 0. System Geometry Table
@@ -103,6 +104,13 @@ def init_db():
             ID_COMPLEX_FLAG INTEGER DEFAULT 0,
             GEOM_PROP_CREATED INTEGER DEFAULT 0,
             ID_PROPERTY_GEOM TEXT,              -- FK to TBL_CORE_GEOMETRY (POLYGON)
+            
+            -- doc flags
+            PROP_GEODETIC_SURVEY_EXIST INTEGER DEFAULT 0,
+            PROP_GEODETIC_SURVEY_DESC TEXT,
+            PROP_GEOLOGICAL_INVEST_EXIST INTEGER DEFAULT 0,
+            PROP_GEOLOGICAL_INVEST_DESC TEXT,
+            
             FOREIGN KEY (ID_PROPERTY_GEOM) REFERENCES TBL_CORE_GEOMETRY (GEOM_ID)
         )
     ''')
@@ -122,6 +130,7 @@ def init_db():
             LAND_USE_DESIG TEXT,
             LAND_OWN_FORM TEXT,
             LAND_TITLE_DOC TEXT,
+            PROP_LEGAL_REP_NAME TEXT,
             FOREIGN KEY (FK_PROPERTY_ID) REFERENCES TBL_CORE_PROPERTY (SYS_PROPERTY_ID)
         )
     ''')
@@ -148,6 +157,16 @@ def init_db():
             ID_BUILDING_GEOM TEXT,              -- FK to TBL_CORE_GEOMETRY (POLYGON)
             GEOM_BLD_CREATED INTEGER DEFAULT 0,
             GEOM_ENTR_CREATED INTEGER DEFAULT 0, -- Track building entrance pin
+            
+            -- documentation
+            BLD_BTI_PASSPORT_EXIST INTEGER DEFAULT 0,
+            BLD_BTI_PASSPORT_DESC TEXT,
+            BLD_READY_FLAG INTEGER DEFAULT 0,  -- Summary readiness flag (Geodetic + Geological + BTI)
+            BLD_USE_DESC TEXT,                  -- Intended Use Description
+            BLD_FOOTPRINT_AREA REAL,            -- Building Footprint Area
+            BLD_TOTAL_VOLUME REAL,              -- Building Total Volume
+            BLD_FIELDWORK_STATUS INTEGER DEFAULT 0, -- 0: Not Selected, 1: Selected, 2: In Progress, 3: Received
+
             FOREIGN KEY (FK_PROPERTY_ID) REFERENCES TBL_CORE_PROPERTY (SYS_PROPERTY_ID),
             FOREIGN KEY (ID_BUILDING_GEOM) REFERENCES TBL_CORE_GEOMETRY (GEOM_ID)
         )
@@ -167,21 +186,39 @@ def init_db():
             INSP_ADDITIONAL_REQ INTEGER DEFAULT 0,
             INSP_DATE TEXT,
             INSP_COMMISSION TEXT,
+
+            -- Added for Fieldwork Expansion
+            INSP_DEVIATIONS_EXIST INTEGER DEFAULT 0,
+            INSP_DEVIATIONS_DESC TEXT,
+            INSP_DAMAGE_EXIST INTEGER DEFAULT 0,
+            INSP_DAMAGE_DESC TEXT,
+            INSP_ELECTRICITY_EXIST INTEGER DEFAULT 0,
+            INSP_ELECTRICITY_DESC TEXT,
+            INSP_WATER_EXIST INTEGER DEFAULT 0,
+            INSP_WATER_DESC TEXT,
+            INSP_WASTEWATER_EXIST INTEGER DEFAULT 0,
+            INSP_WASTEWATER_DESC TEXT,
+            INSP_GAS_EXIST INTEGER DEFAULT 0,
+            INSP_GAS_DESC TEXT,
+            INSP_HEATING_EXIST INTEGER DEFAULT 0,
+            INSP_HEATING_DESC TEXT,
+
             FOREIGN KEY (FK_BLD_ID) REFERENCES TBL_CORE_BUILDING (SYS_BLD_ID)
         )
     ''')
     
-    # 6. Inspection Media Table
+    # 6. Building Media Table
     c.execute('''
-        CREATE TABLE IF NOT EXISTS TBL_CORE_INSPECTION_MEDIA (
+        CREATE TABLE IF NOT EXISTS TBL_CORE_BUILDING_MEDIA (
             SYS_MEDIA_ID TEXT PRIMARY KEY,
-            FK_INSPECTION_ID TEXT NOT NULL,
+            FK_BLD_ID TEXT NOT NULL,
             MEDIA_TYPE TEXT,
+            MEDIA_CATEGORY TEXT,
             MEDIA_URI TEXT,
             MEDIA_DESCRIPTION TEXT,
             MEDIA_TIMESTAMP TEXT,
             MEDIA_SOURCE TEXT,
-            FOREIGN KEY (FK_INSPECTION_ID) REFERENCES TBL_CORE_INSPECTION (SYS_INSPECTION_ID)
+            FOREIGN KEY (FK_BLD_ID) REFERENCES TBL_CORE_BUILDING (SYS_BLD_ID)
         )
     ''')
     
@@ -223,6 +260,13 @@ def init_db():
             SAFE_SANITARY INTEGER DEFAULT 0,
             SAFE_CIVIL_DEF INTEGER DEFAULT 0,
             SAFE_HAZARD_ZONE TEXT,
+            
+            -- Standards & Classification (Stage 3)
+            SAFE_CLASS INTEGER DEFAULT 0,       -- consequence / responsibility class (DSTU-N B V.1.2-16:2013)
+            SAFE_CAT INTEGER DEFAULT 0,         -- structural importance / responsibility category (DBN V.1.2-14-2009)
+            
+            SAFE_NOTES TEXT,
+
             FOREIGN KEY (FK_BUILDING_ID) REFERENCES TBL_CORE_BUILDING (SYS_BLD_ID)
         )
     ''')
@@ -238,6 +282,20 @@ def init_db():
             LAND_FACTUAL_USE TEXT,
             LAND_VEGETATION TEXT,
             LAND_TEMP_STRUCT INTEGER DEFAULT 0,
+            
+            -- Surrounding Infrastructure (0/1 toggles)
+            LAND_ROAD_ACCESS INTEGER DEFAULT 0,
+            LAND_PRESCHOOL INTEGER DEFAULT 0,
+            LAND_SCHOOL INTEGER DEFAULT 0,
+            LAND_HEALTHCARE INTEGER DEFAULT 0,
+            LAND_SOCIAL_SERVICES INTEGER DEFAULT 0,
+            
+            -- Site capacity (0/1 toggles)
+            LAND_AMENITY_SPACE INTEGER DEFAULT 0,
+            LAND_PARKING INTEGER DEFAULT 0,
+            
+            LAND_INFRA_NOTES TEXT,
+
             FOREIGN KEY (FK_PROPERTY_ID) REFERENCES TBL_CORE_PROPERTY (SYS_PROPERTY_ID)
         )
     ''')
@@ -397,6 +455,119 @@ def init_db():
         )
     ''')
 
+    # 20. Building Technical Audit Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS TBL_CORE_BUILDING_TECH_AUDIT (
+            SYS_TECH_ID TEXT PRIMARY KEY,
+            FK_BLD_ID TEXT NOT NULL,
+            AUDIT_DATE TEXT,
+            AUDIT_ENGINEER TEXT,
+            
+            -- Group 1: Substructure
+            TECH_FND_TYPE TEXT,
+            TECH_FND_COND INTEGER DEFAULT 0,
+            TECH_FND_WALLS_TYPE TEXT,
+            TECH_FND_WALLS_COND INTEGER DEFAULT 0,
+            TECH_BASEMENT_TYPE TEXT,
+            TECH_BASEMENT_COND INTEGER DEFAULT 0,
+            TECH_SUBSTRUCTURE_DESC TEXT,
+            
+            -- Group 2: Envelope
+            TECH_WALLS_TYPE TEXT,
+            TECH_WALLS_COND INTEGER DEFAULT 0,
+            TECH_LINTELS_TYPE TEXT,
+            TECH_LINTELS_COND INTEGER DEFAULT 0,
+            TECH_ROOF_TYPE_TYPE TEXT,
+            TECH_ROOF_TYPE_COND INTEGER DEFAULT 0,
+            TECH_ROOF_MAT_TYPE TEXT,
+            TECH_ROOF_MAT_COND INTEGER DEFAULT 0,
+            TECH_WINDOWS_TYPE TEXT,
+            TECH_WINDOWS_COND INTEGER DEFAULT 0,
+            TECH_DOORS_TYPE TEXT,
+            TECH_DOORS_COND INTEGER DEFAULT 0,
+            TECH_ENVELOPE_DESC TEXT,
+            
+            -- Group 3: Finishes & Site
+            TECH_ENTRANCE_TYPE TEXT,
+            TECH_ENTRANCE_COND INTEGER DEFAULT 0,
+            TECH_PAVEMENT_TYPE TEXT,
+            TECH_PAVEMENT_COND INTEGER DEFAULT 0,
+            TECH_INT_FINISH_TYPE TEXT,
+            TECH_INT_FINISH_COND INTEGER DEFAULT 0,
+            TECH_FINISHES_DESC TEXT,
+
+            FOREIGN KEY (FK_BLD_ID) REFERENCES TBL_CORE_BUILDING (SYS_BLD_ID)
+        )
+    ''')
+
+    # Migration: Add documentation columns to existing tables if missing
+    # [[DB_MIG]]
+    tables_to_check = {
+        "TBL_CORE_PROPERTY": [
+            ("PROP_GEODETIC_SURVEY_EXIST", "INTEGER DEFAULT 0"),
+            ("PROP_GEODETIC_SURVEY_DESC", "TEXT"),
+            ("PROP_GEOLOGICAL_INVEST_EXIST", "INTEGER DEFAULT 0"),
+            ("PROP_GEOLOGICAL_INVEST_DESC", "TEXT")
+        ],
+        "TBL_CORE_BUILDING": [
+            ("BLD_BTI_PASSPORT_EXIST", "INTEGER DEFAULT 0"),
+            ("BLD_BTI_PASSPORT_DESC", "TEXT"),
+            ("BLD_READY_FLAG", "INTEGER DEFAULT 0"),
+            ("BLD_USE_DESC", "TEXT"),
+            ("BLD_FOOTPRINT_AREA", "REAL"),
+            ("BLD_TOTAL_VOLUME", "REAL"),
+            ("BLD_LIVING_AREA", "REAL"),
+            ("BLD_FIELDWORK_STATUS", "INTEGER DEFAULT 0")
+        ],
+        "TBL_CORE_LEGAL_OWNERSHIP": [
+            ("PROP_LEGAL_REP_NAME", "TEXT")
+        ],
+        "TBL_CORE_LANDPLOT": [
+            ("LAND_ROAD_ACCESS", "INTEGER DEFAULT 0"),
+            ("LAND_PRESCHOOL", "INTEGER DEFAULT 0"),
+            ("LAND_SCHOOL", "INTEGER DEFAULT 0"),
+            ("LAND_HEALTHCARE", "INTEGER DEFAULT 0"),
+            ("LAND_SOCIAL_SERVICES", "INTEGER DEFAULT 0"),
+            ("LAND_AMENITY_SPACE", "INTEGER DEFAULT 0"),
+            ("LAND_PARKING", "INTEGER DEFAULT 0"),
+            ("LAND_INFRA_NOTES", "TEXT")
+        ],
+        "TBL_CORE_SAFETY": [
+            ("SAFE_CLASS", "INTEGER DEFAULT 0"),
+            ("SAFE_CAT", "INTEGER DEFAULT 0"),
+            ("SAFE_NOTES", "TEXT")
+        ]
+    }
+
+    for table, columns in tables_to_check.items():
+        c.execute(f"PRAGMA table_info({table})")
+        existing_cols = [row[1] for row in c.fetchall()]
+        for col_name, col_def in columns:
+            if col_name not in existing_cols:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
+
+    # --- Media Schema Migration ---
+    # Migration: TBL_CORE_INSPECTION_MEDIA -> TBL_CORE_BUILDING_MEDIA
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='TBL_CORE_INSPECTION_MEDIA'")
+    if c.fetchone():
+        try:
+            # Move data from old to new (joining by inspection to get bld_id)
+            c.execute("""
+                INSERT OR IGNORE INTO TBL_CORE_BUILDING_MEDIA (
+                    SYS_MEDIA_ID, FK_BLD_ID, MEDIA_TYPE, MEDIA_CATEGORY, 
+                    MEDIA_URI, MEDIA_DESCRIPTION, MEDIA_TIMESTAMP, MEDIA_SOURCE
+                )
+                SELECT 
+                    m.SYS_MEDIA_ID, i.FK_BLD_ID, m.MEDIA_TYPE, 'General', 
+                    m.MEDIA_URI, m.MEDIA_DESCRIPTION, m.MEDIA_TIMESTAMP, m.MEDIA_SOURCE
+                FROM TBL_CORE_INSPECTION_MEDIA m
+                JOIN TBL_CORE_INSPECTION i ON m.FK_INSPECTION_ID = i.SYS_INSPECTION_ID
+            """)
+            c.execute("DROP TABLE TBL_CORE_INSPECTION_MEDIA")
+            print("Successfully migrated TBL_CORE_INSPECTION_MEDIA to TBL_CORE_BUILDING_MEDIA")
+        except Exception as e:
+            print(f"Migration error (Media): {e}")
+
 # [[TRG_GEN]]
     # Triggers & Business Logic SQL
     # ------------------------------------------------------------------
@@ -473,6 +644,84 @@ def init_db():
 from db_enums import _ENUM_SEED
 
 
+def seed_admin_units():
+    """
+    Populates TBL_REF_ENUM with Ukrainian Oblasts from the external ukraine_boundaries.db.
+    Appends 'Oblast' to English labels and 'область' to Ukrainian labels.
+    Prioritises Kyiv, Ivano-Frankivska, and Poltava.
+    """
+    import os
+    # Path to the boundaries database
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    boundaries_db = os.path.join(base_dir, "ukraine_boundaries.db")
+    
+    if not os.path.exists(boundaries_db):
+        return False
+        
+    conn_ext = sqlite3.connect(boundaries_db)
+    c_ext = conn_ext.cursor()
+    # admin_level 2 in this DB corresponds to Oblasts/Major Regions
+    c_ext.execute("SELECT DISTINCT ADM1_EN, ADM1_UA, ADM1_PCODE FROM ukraine_boundaries WHERE admin_level = 2")
+    rows = c_ext.fetchall()
+    conn_ext.close()
+    
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # 1. Seed OBLAST_SUFFIX (Metadata for translation)
+    suffix_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, "OBLAST_SUFFIX"))
+    c.execute('''
+        INSERT OR IGNORE INTO TBL_REF_ENUM (SYS_ENUM_ID, ENUM_GROUP, ENUM_CODE, SORT_ORDER)
+        VALUES (?, 'SYSTEM', 'OBLAST_SUFFIX', 0)
+    ''', (suffix_id, ))
+    
+    c.execute('''
+        INSERT OR IGNORE INTO TBL_REF_ENUM_I18N (SYS_ENUM_I18N_ID, FK_ENUM_ID, LANGUAGE_CODE, ENUM_LABEL)
+        VALUES (?, ?, 'en', 'Oblast')
+    ''', (str(uuid.uuid5(uuid.NAMESPACE_DNS, "OBLAST_SUFFIX.en")), suffix_id))
+    
+    c.execute('''
+        INSERT OR IGNORE INTO TBL_REF_ENUM_I18N (SYS_ENUM_I18N_ID, FK_ENUM_ID, LANGUAGE_CODE, ENUM_LABEL)
+        VALUES (?, ?, 'ua', 'область')
+    ''', (str(uuid.uuid5(uuid.NAMESPACE_DNS, "OBLAST_SUFFIX.ua")), suffix_id))
+
+    # 2. Seed ADMIN_UNITs
+    priority_codes = {
+        "UA80": 1, # Kyiv City (Oblast-level)
+        "UA26": 2, # Ivano-Frankivska
+        "UA53": 3  # Poltava
+    }
+    
+    for en, ua, pcode in rows:
+        enum_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"ADMIN_UNIT.{pcode}"))
+        sort_order = priority_codes.get(pcode, 10)
+        
+        c.execute('''
+            INSERT INTO TBL_REF_ENUM (SYS_ENUM_ID, ENUM_GROUP, ENUM_CODE, SORT_ORDER)
+            VALUES (?, 'ADMIN_UNIT', ?, ?)
+            ON CONFLICT(SYS_ENUM_ID) DO UPDATE SET SORT_ORDER = excluded.SORT_ORDER
+        ''', (enum_id, pcode, sort_order))
+        
+        # English translation (Label + Suffix)
+        label_en = f"{en} Oblast"
+        i18n_id_en = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"ADMIN_UNIT.{pcode}.en"))
+        c.execute('''
+            INSERT OR IGNORE INTO TBL_REF_ENUM_I18N (SYS_ENUM_I18N_ID, FK_ENUM_ID, LANGUAGE_CODE, ENUM_LABEL)
+            VALUES (?, ?, 'en', ?)
+        ''', (i18n_id_en, enum_id, label_en))
+        
+        # Ukrainian translation (Label + Suffix)
+        label_ua = f"{ua} область"
+        i18n_id_ua = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"ADMIN_UNIT.{pcode}.ua"))
+        c.execute('''
+            INSERT OR IGNORE INTO TBL_REF_ENUM_I18N (SYS_ENUM_I18N_ID, FK_ENUM_ID, LANGUAGE_CODE, ENUM_LABEL)
+            VALUES (?, ?, 'ua', ?)
+        ''', (i18n_id_ua, enum_id, label_ua))
+        
+    conn.commit()
+    conn.close()
+    return True
+
 def seed_enums():
     """
     Populate TBL_REF_ENUM and TBL_REF_ENUM_I18N with the authoritative enum values.
@@ -497,6 +746,9 @@ def seed_enums():
 
     conn.commit()
     conn.close()
+    
+    # Import Admin Units from external DB
+    seed_admin_units()
 
 
 # ------------------------------------------------------------------
@@ -689,59 +941,49 @@ def delete_property(property_id):
     c = conn.cursor()
     try:
         # 1. Collect all geometry IDs before deleting anything
-        c.execute("""
-            SELECT ID_PROPERTY_GEOM, ID_ADDRESS_GEOM 
-            FROM TBL_CORE_PROPERTY 
-            WHERE SYS_PROPERTY_ID = ?
-        """, (property_id,))
+        geom_ids = []
+        
+        # 1a. Property Geometry
+        c.execute("SELECT ID_PROPERTY_GEOM FROM TBL_CORE_PROPERTY WHERE SYS_PROPERTY_ID = ?", (property_id,))
         prop_row = c.fetchone()
+        if prop_row and prop_row[0]:
+            geom_ids.append(prop_row[0])
 
-        c.execute("""
-            SELECT ID_BUILDING_GEOM 
-            FROM TBL_CORE_BUILDING 
-            WHERE FK_PROPERTY_ID = ?
-        """, (property_id,))
-        bld_geom_rows = c.fetchall()
+        # 1b. Building Geometries (Footprint + Entrance Point)
+        c.execute("SELECT ID_BUILDING_GEOM, SYS_BLD_ID FROM TBL_CORE_BUILDING WHERE FK_PROPERTY_ID = ?", (property_id,))
+        bld_rows = c.fetchall()
+        bld_ids = []
+        for b_geom, b_id in bld_rows:
+            if b_geom: geom_ids.append(b_geom)
+            if b_id: 
+                geom_ids.append(b_id) # entrance point
+                bld_ids.append(b_id)
 
-        c.execute("""
-            SELECT ID_ADDR_GEOM 
-            FROM TBL_CORE_ADDRESS 
-            WHERE FK_PROPERTY_ID = ?
-        """, (property_id,))
+        # 1c. Address Geometry
+        c.execute("SELECT ID_ADDR_GEOM FROM TBL_CORE_ADDRESS WHERE FK_PROPERTY_ID = ?", (property_id,))
         addr_row = c.fetchone()
+        if addr_row and addr_row[0]:
+            geom_ids.append(addr_row[0])
 
-        # 2. Get building IDs for deeper cascade
-        c.execute("""
-            SELECT SYS_BLD_ID 
-            FROM TBL_CORE_BUILDING 
-            WHERE FK_PROPERTY_ID = ?
-        """, (property_id,))
-        bld_ids = [r[0] for r in c.fetchall()]
-
-        # 3. Get inspection IDs for media cascade
+        # 2. Deeper cascade for buildings (Inspections, Media, etc.)
         for bld_id in bld_ids:
-            c.execute("""
-                SELECT SYS_INSPECTION_ID 
-                FROM TBL_CORE_INSPECTION 
-                WHERE FK_BLD_ID = ?
-            """, (bld_id,))
+            c.execute("SELECT SYS_INSPECTION_ID FROM TBL_CORE_INSPECTION WHERE FK_BLD_ID = ?", (bld_id,))
             insp_ids = [r[0] for r in c.fetchall()]
 
-            # 4. Delete inspection media
-            for insp_id in insp_ids:
-                c.execute("DELETE FROM TBL_CORE_INSPECTION_MEDIA WHERE FK_INSPECTION_ID = ?", (insp_id,))
+            # 3. Delete building media
+            c.execute("DELETE FROM TBL_CORE_BUILDING_MEDIA WHERE FK_BLD_ID = ?", (bld_id,))
 
-            # 5. Delete inspections
+            # 4. Delete inspections
             c.execute("DELETE FROM TBL_CORE_INSPECTION  WHERE FK_BLD_ID = ?", (bld_id,))
 
-            # 6. Delete building linked tables
+            # 5. Delete building linked tables
             c.execute("DELETE FROM TBL_CORE_SUITABILITY WHERE FK_BUILDING_ID = ?", (bld_id,))
             c.execute("DELETE FROM TBL_CORE_OCCUPANCY   WHERE FK_BUILDING_ID = ?", (bld_id,))
             c.execute("DELETE FROM TBL_CORE_SAFETY      WHERE FK_BUILDING_ID = ?", (bld_id,))
             c.execute("DELETE FROM TBL_CORE_ALLOCATION  WHERE FK_BUILDING_ID = ?", (bld_id,))
             c.execute("DELETE FROM TBL_LINK_ALLOCATION  WHERE FK_BUILDING_ID = ?", (bld_id,))
 
-        # 7. Delete address admin region links
+        # 6. Delete address admin region links
         c.execute("""
             DELETE FROM TBL_LINK_ADDRESS_ADMIN_REGION 
             WHERE FK_SYS_ADDR_ID IN (
@@ -750,7 +992,7 @@ def delete_property(property_id):
             )
         """, (property_id,))
 
-        # 8. Delete property-level records
+        # 7. Delete property-level records
         c.execute("DELETE FROM TBL_CORE_BUILDING       WHERE FK_PROPERTY_ID = ?", (property_id,))
         c.execute("DELETE FROM TBL_CORE_ADDRESS        WHERE FK_PROPERTY_ID = ?", (property_id,))
         c.execute("DELETE FROM TBL_CORE_LEGAL_OWNERSHIP WHERE FK_PROPERTY_ID = ?", (property_id,))
@@ -758,20 +1000,11 @@ def delete_property(property_id):
         c.execute("DELETE FROM TBL_CORE_GOVERNANCE     WHERE FK_PROPERTY_ID = ?", (property_id,))
         c.execute("DELETE FROM TBL_LINK_GOVERNANCE     WHERE FK_PROPERTY_ID = ?", (property_id,))
 
-        # 9. Delete property
+        # 8. Delete property
         c.execute("DELETE FROM TBL_CORE_PROPERTY WHERE SYS_PROPERTY_ID = ?", (property_id,))
 
-        # 10. Clean up orphaned geometry records
-        geom_ids = []
-        if prop_row:
-            if prop_row[0]: geom_ids.append(prop_row[0])
-            if prop_row[1]: geom_ids.append(prop_row[1])
-        for row in bld_geom_rows:
-            if row[0]: geom_ids.append(row[0])
-        if addr_row and addr_row[0]:
-            geom_ids.append(addr_row[0])
-
-        for geom_id in geom_ids:
+        # 9. Clean up Collected Geometry records
+        for geom_id in set(geom_ids): # Set to avoid double delete if IDs overlap
             c.execute("DELETE FROM TBL_CORE_GEOMETRY WHERE GEOM_ID = ?", (geom_id,))
 
         conn.commit()
@@ -787,20 +1020,196 @@ def delete_property(property_id):
 ### End Delete
 
 ### Updates to different tables
-def update_complex_flag(property_id, is_complex):
-    """Updates the complex/multi-building flag on the property record."""
+def update_property_metadata(property_id, is_complex, 
+                             geodetic_exist=0, geodetic_desc='', 
+                             geological_exist=0, geological_desc=''):
+    """Updates property-level metadata including complex flag and documentation."""
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute("""
             UPDATE TBL_CORE_PROPERTY
-            SET ID_COMPLEX_FLAG = ?
+            SET ID_COMPLEX_FLAG = ?,
+                PROP_GEODETIC_SURVEY_EXIST = ?,
+                PROP_GEODETIC_SURVEY_DESC = ?,
+                PROP_GEOLOGICAL_INVEST_EXIST = ?,
+                PROP_GEOLOGICAL_INVEST_DESC = ?
             WHERE SYS_PROPERTY_ID = ?
-        """, (int(is_complex), property_id))
+        """, (int(is_complex), int(geodetic_exist), geodetic_desc, 
+              int(geological_exist), geological_desc, property_id))
         conn.commit()
         return True
     except Exception as e:
-        print(f"Error updating complex flag: {e}")
+        print(f"Error updating property metadata: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_property_name(property_id, admin_unit, cadastral_no):
+    """Updates property name (Admin Unit and Cadastral No)."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("""
+            UPDATE TBL_CORE_PROPERTY
+            SET ID_ADMIN_UNIT = ?,
+                ID_CADASTRAL_NO = ?
+            WHERE SYS_PROPERTY_ID = ?
+        """, (admin_unit, cadastral_no, property_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error updating property name: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_building_details(building_id, total_area, floors, bti_exist=0, bti_desc='', ready_flag=0,
+                            bld_type='UNKNOWN', use_desc='', nc_code='',
+                            living_area=0.0, eng_sys=0, footprint_area=0.0, total_volume=0.0,
+                            insp_routine=0, insp_major=0, insp_reconstruction=0, insp_refitting=0,
+                            suit_idp_yes=0, suit_recon=0, suit_refit=0, suit_unsuitable=0,
+                            free_area=0.0, fieldwork_status=0,
+                            insp_deviations_exist=0, insp_deviations_desc='',
+                            insp_damage_exist=0, insp_damage_desc='',
+                            insp_elec_exist=0, insp_elec_desc='',
+                            insp_water_exist=0, insp_water_desc='',
+                            insp_waste_exist=0, insp_waste_desc='',
+                            insp_gas_exist=0, insp_gas_desc='',
+                            insp_heat_exist=0, insp_heat_desc=''):
+    """Updates building metadata and linked records in TBL_CORE_INSPECTION and TBL_CORE_SUITABILITY."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # 1. Update TBL_CORE_BUILDING
+        c.execute("""
+            UPDATE TBL_CORE_BUILDING
+            SET BLD_TOTAL_AREA   = ?,
+                BLD_FLOORS       = ?,
+                BLD_BTI_PASSPORT_EXIST = ?,
+                BLD_BTI_PASSPORT_DESC  = ?,
+                BLD_READY_FLAG         = ?,
+                BLD_TYPE               = ?,
+                BLD_USE_DESC           = ?,
+                BLD_NC_CODE            = ?,
+                BLD_LIVING_AREA        = ?,
+                BLD_ENG_SYS            = ?,
+                BLD_FOOTPRINT_AREA     = ?,
+                BLD_TOTAL_VOLUME       = ?,
+                BLD_FREE_AREA          = ?,
+                BLD_FIELDWORK_STATUS   = ?
+            WHERE SYS_BLD_ID = ?
+        """, (total_area, int(floors), int(bti_exist), bti_desc, int(ready_flag), 
+              bld_type, use_desc, nc_code, 
+              float(living_area), int(eng_sys), float(footprint_area), float(total_volume),
+              float(free_area), int(fieldwork_status), building_id))
+
+        # 2. Update/Insert TBL_CORE_INSPECTION
+        c.execute("SELECT SYS_INSPECTION_ID FROM TBL_CORE_INSPECTION WHERE FK_BLD_ID = ?", (building_id,))
+        insp_row = c.fetchone()
+        if insp_row:
+            insp_id = insp_row[0]
+            c.execute("""
+                UPDATE TBL_CORE_INSPECTION
+                SET INSP_ROUTINE_REPAIR = ?,
+                    INSP_MAJOR_REPAIR   = ?,
+                    INSP_RECONSTRUCTION = ?,
+                    INSP_REFITTING      = ?,
+                    INSP_DEVIATIONS_EXIST = ?,
+                    INSP_DEVIATIONS_DESC  = ?,
+                    INSP_DAMAGE_EXIST     = ?,
+                    INSP_DAMAGE_DESC      = ?,
+                    INSP_ELECTRICITY_EXIST = ?,
+                    INSP_ELECTRICITY_DESC  = ?,
+                    INSP_WATER_EXIST       = ?,
+                    INSP_WATER_DESC        = ?,
+                    INSP_WASTEWATER_EXIST  = ?,
+                    INSP_WASTEWATER_DESC   = ?,
+                    INSP_GAS_EXIST         = ?,
+                    INSP_GAS_DESC          = ?,
+                    INSP_HEATING_EXIST     = ?,
+                    INSP_HEATING_DESC      = ?
+                WHERE SYS_INSPECTION_ID = ?
+            """, (int(insp_routine), int(insp_major), int(insp_reconstruction), int(insp_refitting),
+                  int(insp_deviations_exist), insp_deviations_desc,
+                  int(insp_damage_exist), insp_damage_desc,
+                  int(insp_elec_exist), insp_elec_desc,
+                  int(insp_water_exist), insp_water_desc,
+                  int(insp_waste_exist), insp_waste_desc,
+                  int(insp_gas_exist), insp_gas_desc,
+                  int(insp_heat_exist), insp_heat_desc,
+                  insp_id))
+        else:
+            insp_id = str(uuid.uuid4())
+            c.execute("""
+                INSERT INTO TBL_CORE_INSPECTION (
+                    SYS_INSPECTION_ID, FK_BLD_ID, 
+                    INSP_ROUTINE_REPAIR, INSP_MAJOR_REPAIR, 
+                    INSP_RECONSTRUCTION, INSP_REFITTING,
+                    INSP_DEVIATIONS_EXIST, INSP_DEVIATIONS_DESC,
+                    INSP_DAMAGE_EXIST, INSP_DAMAGE_DESC,
+                    INSP_ELECTRICITY_EXIST, INSP_ELECTRICITY_DESC,
+                    INSP_WATER_EXIST, INSP_WATER_DESC,
+                    INSP_WASTEWATER_EXIST, INSP_WASTEWATER_DESC,
+                    INSP_GAS_EXIST, INSP_GAS_DESC,
+                    INSP_HEATING_EXIST, INSP_HEATING_DESC
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (insp_id, building_id, int(insp_routine), int(insp_major), int(insp_reconstruction), int(insp_refitting),
+                  int(insp_deviations_exist), insp_deviations_desc,
+                  int(insp_damage_exist), insp_damage_desc,
+                  int(insp_elec_exist), insp_elec_desc,
+                  int(insp_water_exist), insp_water_desc,
+                  int(insp_waste_exist), insp_waste_desc,
+                  int(insp_gas_exist), insp_gas_desc,
+                  int(insp_heat_exist), insp_heat_desc))
+
+        # 3. Update/Insert TBL_CORE_SUITABILITY
+        c.execute("SELECT SYS_SUIT_ID FROM TBL_CORE_SUITABILITY WHERE FK_BUILDING_ID = ?", (building_id,))
+        suit_row = c.fetchone()
+        if suit_row:
+            suit_id = suit_row[0]
+            c.execute("""
+                UPDATE TBL_CORE_SUITABILITY
+                SET SUIT_IDP_YES     = ?,
+                    SUIT_AFTER_RECON = ?,
+                    SUIT_AFTER_REFIT = ?,
+                    SUIT_UNSUITABLE  = ?
+                WHERE SYS_SUIT_ID = ?
+            """, (int(suit_idp_yes), int(suit_recon), int(suit_refit), int(suit_unsuitable), suit_id))
+        else:
+            suit_id = str(uuid.uuid4())
+            c.execute("""
+                INSERT INTO TBL_CORE_SUITABILITY (
+                    SYS_SUIT_ID, FK_BUILDING_ID, 
+                    SUIT_IDP_YES, SUIT_AFTER_RECON, 
+                    SUIT_AFTER_REFIT, SUIT_UNSUITABLE
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (suit_id, building_id, int(suit_idp_yes), int(suit_recon), int(suit_refit), int(suit_unsuitable)))
+
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating building metadata: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_fieldwork_status(building_id, status):
+    """
+    Isolated update for fieldwork selection status.
+    Provides immediate persistence for selection/deselection actions.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE TBL_CORE_BUILDING SET BLD_FIELDWORK_STATUS = ? WHERE SYS_BLD_ID = ?", (int(status), building_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"Error updating fieldwork status: {e}")
         return False
     finally:
         conn.close()
@@ -845,13 +1254,8 @@ def delete_building(building_id):
         row = c.fetchone()
         bld_geom_id = row[0] if row else None
         
-        # 2. Delete inspection media
-        c.execute("""
-            DELETE FROM TBL_CORE_INSPECTION_MEDIA 
-            WHERE FK_INSPECTION_ID IN (
-                SELECT SYS_INSPECTION_ID FROM TBL_CORE_INSPECTION WHERE FK_BLD_ID = ?
-            )
-        """, (building_id,))
+        # 2. Delete building media
+        c.execute("DELETE FROM TBL_CORE_BUILDING_MEDIA WHERE FK_BLD_ID = ?", (building_id,))
         
         # 3. Delete inspections
         c.execute("DELETE FROM TBL_CORE_INSPECTION WHERE FK_BLD_ID = ?", (building_id,))
@@ -881,18 +1285,29 @@ def delete_building(building_id):
     finally:
         conn.close()
 
-def update_legal_ownership(property_id, own_type, own_entity, doc_exist, consent, encumbrances):
+def update_legal_ownership(property_id, own_type, own_entity, doc_exist, consent, encumbrances,
+                           land_use='', land_own='', land_title='', legal_rep=''):
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute("""
             UPDATE TBL_CORE_LEGAL_OWNERSHIP
-            SET OWN_TYPE = ?, OWN_ENTITY = ?, LEG_DOC_EXIST = ?, OWN_CONSENT = ?, ENCUMBRANCES = ?
+            SET OWN_TYPE = ?, 
+                OWN_ENTITY = ?, 
+                LEG_DOC_EXIST = ?, 
+                OWN_CONSENT = ?, 
+                ENCUMBRANCES = ?,
+                LAND_USE_DESIG = ?,
+                LAND_OWN_FORM = ?,
+                LAND_TITLE_DOC = ?,
+                PROP_LEGAL_REP_NAME = ?
             WHERE FK_PROPERTY_ID = ?
-        """, (own_type, own_entity, int(doc_exist), int(consent), encumbrances, property_id))
+        """, (own_type, own_entity, int(doc_exist), int(consent), encumbrances, 
+              land_use, land_own, land_title, legal_rep, property_id))
         conn.commit()
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Error updating legal ownership: {e}")
         return False
     finally:
         conn.close()
@@ -1027,10 +1442,11 @@ def reset_address_geometry(addr_geom_id, updated_by='SYSTEM'):
     finally:
         conn.close()
 
-def update_landplot(property_id, size, category, intended_use):
+def update_landplot(property_id, size, category, intended_use, factual_use=None, vegetation=None, temp_struct=0,
+                    road_access=0, preschool=0, school=0, healthcare=0, social_services=0, 
+                    amenity_space=0, parking=0, infra_notes=''):
     """
-    Updates land plot characteristics for a given property.
-    Factual use and other Stage 2 fields are not updated here.
+    Updates land plot characteristics for a given property, including Stage 2 fieldwork results.
     """
     conn = get_connection()
     c = conn.cursor()
@@ -1039,9 +1455,22 @@ def update_landplot(property_id, size, category, intended_use):
             UPDATE TBL_CORE_LANDPLOT
             SET LAND_SIZE         = ?,
                 LAND_CATEGORY     = ?,
-                LAND_INTENDED_USE = ?
+                LAND_INTENDED_USE = ?,
+                LAND_FACTUAL_USE  = ?,
+                LAND_VEGETATION   = ?,
+                LAND_TEMP_STRUCT  = ?,
+                LAND_ROAD_ACCESS  = ?,
+                LAND_PRESCHOOL    = ?,
+                LAND_SCHOOL       = ?,
+                LAND_HEALTHCARE   = ?,
+                LAND_SOCIAL_SERVICES = ?,
+                LAND_AMENITY_SPACE = ?,
+                LAND_PARKING       = ?,
+                LAND_INFRA_NOTES  = ?
             WHERE FK_PROPERTY_ID = ?
-        """, (size, category, intended_use, property_id))
+        """, (size, category, intended_use, factual_use, vegetation, int(temp_struct), 
+              int(road_access), int(preschool), int(school), int(healthcare), int(social_services),
+              int(amenity_space), int(parking), infra_notes, property_id))
         conn.commit()
         return True
     except Exception as e:
@@ -1050,18 +1479,152 @@ def update_landplot(property_id, size, category, intended_use):
     finally:
         conn.close()
 
-def update_governance(property_id, commission_dec, decision_date, disclosure):
+def update_governance(property_id, commission_dec, decision_date, disclosure, ias_entry=None, funding=None, dream_sidar=None):
+    """
+    Updates governance information for a given property.
+    """
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute("""
             UPDATE TBL_CORE_GOVERNANCE
-            SET GOV_COMMISSION_DEC = ?, GOV_DECISION_DATE = ?, GOV_DISCLOSURE = ?
+            SET GOV_COMMISSION_DEC = ?, 
+                GOV_DECISION_DATE = ?, 
+                GOV_DISCLOSURE = ?,
+                GOV_IAS_ENTRY = ?,
+                GOV_FUNDING = ?,
+                GOV_DREAM_SIDAR = ?
             WHERE FK_PROPERTY_ID = ?
-        """, (commission_dec, decision_date, int(disclosure), property_id))
+        """, (commission_dec, decision_date, int(disclosure), ias_entry, funding, dream_sidar, property_id))
         conn.commit()
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Error updating governance: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_safety(building_id, pwd_access=0, fire=0, sanitary=0, civil_def=0, hazard_zone='', 
+                  safe_class=0, safe_cat=0, safe_notes=''):
+    """
+    Updates or inserts a safety assessment record for a building.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Check if record exists
+        c.execute("SELECT SYS_SAFE_ID FROM TBL_CORE_SAFETY WHERE FK_BUILDING_ID = ?", (building_id,))
+        row = c.fetchone()
+        
+        if row:
+            safe_id = row[0]
+            c.execute("""
+                UPDATE TBL_CORE_SAFETY
+                SET SAFE_PWD_ACCESS = ?,
+                    SAFE_FIRE       = ?,
+                    SAFE_SANITARY   = ?,
+                    SAFE_CIVIL_DEF  = ?,
+                    SAFE_HAZARD_ZONE = ?,
+                    SAFE_CLASS      = ?,
+                    SAFE_CAT        = ?,
+                    SAFE_NOTES      = ?
+                WHERE SYS_SAFE_ID = ?
+            """, (int(pwd_access), int(fire), int(sanitary), int(civil_def), 
+                  hazard_zone, int(safe_class), int(safe_cat), safe_notes, safe_id))
+        else:
+            safe_id = str(uuid.uuid4())
+            c.execute("""
+                INSERT INTO TBL_CORE_SAFETY (
+                    SYS_SAFE_ID, FK_BUILDING_ID, SAFE_PWD_ACCESS, SAFE_FIRE, 
+                    SAFE_SANITARY, SAFE_CIVIL_DEF, SAFE_HAZARD_ZONE, 
+                    SAFE_CLASS, SAFE_CAT, SAFE_NOTES
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (safe_id, building_id, int(pwd_access), int(fire), int(sanitary), int(civil_def), 
+                  hazard_zone, int(safe_class), int(safe_cat), safe_notes))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error updating safety: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_technical_audit(building_id, audit_date='', audit_engineer='',
+                            fnd_type='', fnd_cond=0, fnd_walls_type='', fnd_walls_cond=0,
+                            basement_type='', basement_cond=0, substructure_desc='',
+                            walls_type='', walls_cond=0, lintels_type='', lintels_cond=0,
+                            roof_type_type='', roof_type_cond=0, roof_mat_type='', roof_mat_cond=0,
+                            windows_type='', windows_cond=0, doors_type='', doors_cond=0,
+                            envelope_desc='', entrance_type='', entrance_cond=0,
+                            pavement_type='', pavement_cond=0, int_finish_type='', int_finish_cond=0,
+                            finishes_desc=''):
+    """
+    Updates or inserts a technical audit record for a building.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT SYS_TECH_ID FROM TBL_CORE_BUILDING_TECH_AUDIT WHERE FK_BLD_ID = ?", (building_id,))
+        row = c.fetchone()
+        
+        if row:
+            tech_id = row[0]
+            c.execute("""
+                UPDATE TBL_CORE_BUILDING_TECH_AUDIT
+                SET AUDIT_DATE = ?, AUDIT_ENGINEER = ?,
+                    TECH_FND_TYPE = ?, TECH_FND_COND = ?,
+                    TECH_FND_WALLS_TYPE = ?, TECH_FND_WALLS_COND = ?,
+                    TECH_BASEMENT_TYPE = ?, TECH_BASEMENT_COND = ?,
+                    TECH_SUBSTRUCTURE_DESC = ?,
+                    TECH_WALLS_TYPE = ?, TECH_WALLS_COND = ?,
+                    TECH_LINTELS_TYPE = ?, TECH_LINTELS_COND = ?,
+                    TECH_ROOF_TYPE_TYPE = ?, TECH_ROOF_TYPE_COND = ?,
+                    TECH_ROOF_MAT_TYPE = ?, TECH_ROOF_MAT_COND = ?,
+                    TECH_WINDOWS_TYPE = ?, TECH_WINDOWS_COND = ?,
+                    TECH_DOORS_TYPE = ?, TECH_DOORS_COND = ?,
+                    TECH_ENVELOPE_DESC = ?,
+                    TECH_ENTRANCE_TYPE = ?, TECH_ENTRANCE_COND = ?,
+                    TECH_PAVEMENT_TYPE = ?, TECH_PAVEMENT_COND = ?,
+                    TECH_INT_FINISH_TYPE = ?, TECH_INT_FINISH_COND = ?,
+                    TECH_FINISHES_DESC = ?
+                WHERE SYS_TECH_ID = ?
+            """, (audit_date, audit_engineer, fnd_type, int(fnd_cond),
+                  fnd_walls_type, int(fnd_walls_cond), basement_type, int(basement_cond),
+                  substructure_desc, walls_type, int(walls_cond), lintels_type, int(lintels_cond),
+                  roof_type_type, int(roof_type_cond), roof_mat_type, int(roof_mat_cond),
+                  windows_type, int(windows_cond), doors_type, int(doors_cond),
+                  envelope_desc, entrance_type, int(entrance_cond),
+                  pavement_type, int(pavement_cond), int_finish_type, int(int_finish_cond),
+                  finishes_desc, tech_id))
+        else:
+            tech_id = str(uuid.uuid4())
+            c.execute("""
+                INSERT INTO TBL_CORE_BUILDING_TECH_AUDIT (
+                    SYS_TECH_ID, FK_BLD_ID, AUDIT_DATE, AUDIT_ENGINEER,
+                    TECH_FND_TYPE, TECH_FND_COND, TECH_FND_WALLS_TYPE, TECH_FND_WALLS_COND,
+                    TECH_BASEMENT_TYPE, TECH_BASEMENT_COND, TECH_SUBSTRUCTURE_DESC,
+                    TECH_WALLS_TYPE, TECH_WALLS_COND, TECH_LINTELS_TYPE, TECH_LINTELS_COND,
+                    TECH_ROOF_TYPE_TYPE, TECH_ROOF_TYPE_COND, TECH_ROOF_MAT_TYPE, TECH_ROOF_MAT_COND,
+                    TECH_WINDOWS_TYPE, TECH_WINDOWS_COND, TECH_DOORS_TYPE, TECH_DOORS_COND,
+                    TECH_ENVELOPE_DESC, TECH_ENTRANCE_TYPE, TECH_ENTRANCE_COND,
+                    TECH_PAVEMENT_TYPE, TECH_PAVEMENT_COND, TECH_INT_FINISH_TYPE, TECH_INT_FINISH_COND,
+                    TECH_FINISHES_DESC
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (tech_id, building_id, audit_date, audit_engineer,
+                  fnd_type, int(fnd_cond), fnd_walls_type, int(fnd_walls_cond),
+                  basement_type, int(basement_cond), substructure_desc,
+                  walls_type, int(walls_cond), lintels_type, int(lintels_cond),
+                  roof_type_type, int(roof_type_cond), roof_mat_type, int(roof_mat_cond),
+                  windows_type, int(windows_cond), doors_type, int(doors_cond),
+                  envelope_desc, entrance_type, int(entrance_cond),
+                  pavement_type, int(pavement_cond), int_finish_type, int(int_finish_cond),
+                  finishes_desc))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error updating technical audit: {e}")
         return False
     finally:
         conn.close()
